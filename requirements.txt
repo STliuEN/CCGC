@@ -1,0 +1,21 @@
+# Source-driven dependency list for this repository.
+# This keeps only packages directly imported by project code instead of a full
+# environment export with transitive dependencies.
+#
+# For GPU training, install the PyTorch build that matches your CPU/CUDA setup
+# first if needed, then run: pip install -r requirements.txt
+
+# Core CCGC training / evaluation
+numpy>=1.24,<3.0
+scipy>=1.9,<2.0
+scikit-learn>=1.2,<2.0
+torch>=1.13,<3.0
+torch-geometric>=2.3,<3.0
+tqdm>=4.59,<5.0
+munkres>=1.1.4,<2.0
+networkx>=2.8,<4.0
+matplotlib>=3.5,<4.0
+
+# Data preprocessing / bundled auxiliary projects
+h5py>=3.8,<4.0
+pandas>=1.5,<3.0
