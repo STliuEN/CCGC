@@ -38,10 +38,11 @@ CONFIG = {
     "run_dual": False,
     "run_dual_mean": False,
     "run_dual_attn": True,
-    # When OFF, keep the original flow: regenerate AE artifacts every run.
-    # When ON, skip AE pretraining/graph regeneration and directly reuse the
-    # existing Ae graph on disk to save time.
-    "reuse_existing_ae_results": False,
+    # Final-paper default: reuse fixed/precomputed AE artifacts.
+    # This keeps the reported 10-run variance tied to main-training seeds only
+    # and prevents experiment.py from overwriting released AE graph assets.
+    # Set this to False only when deliberately rebuilding AE preprocessing files.
+    "reuse_existing_ae_results": True,
     # 2.5) Optional CCGC improvement modules (decoupled switches).
     # Keep default OFF to preserve legacy training behavior.
     "enable_dynamic_threshold_module": False,
@@ -185,15 +186,25 @@ CONFIG = {
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.20,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.6,
+            },
             "safe_tuning_grid": {
+                "train_args": {
+                    "threshold": [0.35, 0.4, 0.45],
+                },
                 "dual_attn_args": {
                     "fusion_temp": [1.8, 2.0, 2.2],
-                    "fusion_balance": [0.35, 0.45],
+                    "fusion_balance": [0.30, 0.35, 0.45],
                     "fusion_min_weight": [0.15, 0.20, 0.25],
+                    "lambda_inst": [0.07, 0.09, 0.11],
+                    "lambda_clu": [0.07, 0.09, 0.11],
+                    "warmup_epochs": [25, 35, 45],
                 },
                 "dcgl_negative_args": {
-                    "dcgl_neg_tau": [0.75, 1.0],
-                    "dcgl_neg_weight": [0.8, 1.0],
+                    "dcgl_neg_tau": [0.5, 0.75, 1.0],
+                    "dcgl_neg_weight": [0.3, 0.4, 0.5, 0.6, 0.8],
                 },
             },
         },
@@ -227,13 +238,24 @@ CONFIG = {
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.15,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.3,
+            },
             "safe_tuning_grid": {
+                "train_args": {
+                    "threshold": [0.35, 0.4, 0.45],
+                },
                 "dual_attn_args": {
+                    "fusion_balance": [0.20, 0.25, 0.30],
                     "fusion_min_weight": [0.10, 0.15, 0.20],
+                    "lambda_inst": [0.06, 0.08, 0.10],
+                    "lambda_clu": [0.04, 0.06, 0.08],
+                    "warmup_epochs": [25, 35, 45],
                 },
                 "dcgl_negative_args": {
-                    "dcgl_neg_tau": [0.5, 0.75],
-                    "dcgl_neg_weight": [0.4, 0.6],
+                    "dcgl_neg_tau": [0.5, 0.75, 1.0],
+                    "dcgl_neg_weight": [0.3, 0.4, 0.5, 0.6],
                 },
             },
         },
@@ -288,16 +310,25 @@ CONFIG = {
                 "fusion_hidden": 64,
                 "fusion_temp": 1.25,
                 "fusion_balance": 0.08,
-                "lambda_inst": 0.07,
+                "lambda_inst": 0.0,
                 "lambda_clu": 0.035,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.6,
+            },
             "safe_tuning_grid": {
+                "train_args": {
+                    "threshold": [0.35, 0.4, 0.45],
+                },
                 "dual_attn_args": {
                     "fusion_balance": [0.05, 0.08, 0.10],
                     "lambda_inst": [0.0, 0.03, 0.07],
                     "fusion_min_weight": [0.0, 0.05, 0.10],
+                    "lambda_clu": [0.02, 0.035, 0.05],
+                    "warmup_epochs": [25, 35, 45],
                 },
                 "dcgl_negative_args": {
                     "dcgl_neg_tau": [0.5, 1.0],
@@ -374,15 +405,26 @@ CONFIG = {
                 # "branch_bias_target": "raw",
                 # "branch_bias_cap": 0.15,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.6,
+            },
             "safe_tuning_grid": {
+                "train_args": {
+                    "threshold": [0.35, 0.4, 0.45],
+                },
                 "dual_attn_args": {
-                    "fusion_balance": [0.15, 0.25, 0.35],
-                    "fusion_min_weight": [0.10, 0.15, 0.20],
+                    "fusion_temp": [1.6, 1.8, 2.0],
+                    "fusion_balance": [0.10, 0.15, 0.25, 0.35],
+                    "fusion_min_weight": [0.05, 0.10, 0.15, 0.20],
+                    "lambda_inst": [0.03, 0.045, 0.06],
+                    "lambda_clu": [0.01, 0.02, 0.03],
+                    "warmup_epochs": [45, 55, 65],
                     "branch_bias_cap": [0.12, 0.15, 0.18],
                 },
                 "dcgl_negative_args": {
-                    "dcgl_neg_tau": [0.35, 0.5, 1.0],
-                    "dcgl_neg_weight": [0.6, 1.0],
+                    "dcgl_neg_tau": [0.35, 0.5, 0.75, 1.0],
+                    "dcgl_neg_weight": [0.3, 0.4, 0.6, 0.8, 1.0],
                 },
             },
         },
@@ -423,16 +465,25 @@ CONFIG = {
                 # "branch_bias_target": "raw",
                 # "branch_bias_cap": 0.10,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.6,
+            },
             "safe_tuning_grid": {
                 "train_args": {
-                    "threshold": [0.35, 0.4],
+                    "threshold": [0.35, 0.4, 0.45],
                 },
                 "dual_attn_args": {
+                    "fusion_balance": [0.0, 0.05, 0.10],
+                    "fusion_min_weight": [0.0, 0.05, 0.10],
+                    "lambda_inst": [0.02, 0.03, 0.04],
+                    "lambda_clu": [0.005, 0.01, 0.02],
+                    "warmup_epochs": [55, 70, 85],
                     "branch_bias_cap": [0.08, 0.10, 0.12],
                 },
                 "dcgl_negative_args": {
-                    "dcgl_neg_tau": [0.35, 0.5],
-                    "dcgl_neg_weight": [0.6, 0.8, 1.0],
+                    "dcgl_neg_tau": [0.35, 0.5, 0.75],
+                    "dcgl_neg_weight": [0.3, 0.4, 0.6, 0.8, 1.0],
                 },
             },
         },
@@ -493,18 +544,25 @@ CONFIG = {
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.20,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.6,
+            },
             "safe_tuning_grid": {
                 "train_args": {
-                    "threshold": [0.4, 0.45, 0.5],
+                    "threshold": [0.35, 0.4, 0.45, 0.5],
                 },
                 "dual_attn_args": {
                     "fusion_temp": [1.8, 2.0, 2.2],
                     "fusion_balance": [0.25, 0.35],
                     "fusion_min_weight": [0.15, 0.20],
+                    "lambda_inst": [0.06, 0.08, 0.10],
+                    "lambda_clu": [0.06, 0.08, 0.10],
+                    "warmup_epochs": [25, 35, 45],
                 },
                 "dcgl_negative_args": {
-                    "dcgl_neg_tau": [0.35, 0.5],
-                    "dcgl_neg_weight": [0.8, 1.0],
+                    "dcgl_neg_tau": [0.35, 0.5, 0.75],
+                    "dcgl_neg_weight": [0.3, 0.4, 0.5, 0.6, 0.8],
                 },
             },
         },
@@ -563,12 +621,25 @@ CONFIG = {
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.20,
             },
+            "dcgl_negative_args": {
+                "dcgl_neg_tau": 0.5,
+                "dcgl_neg_weight": 0.4,
+            },
             "safe_tuning_grid": {
+                "train_args": {
+                    "threshold": [0.35, 0.4, 0.45],
+                },
                 "dual_attn_args": {
-                    "fusion_temp": [1.9, 2.1],
-                    "fusion_balance": [0.35, 0.45],
+                    "fusion_temp": [1.8, 1.9, 2.0, 2.1],
+                    "fusion_balance": [0.30, 0.35, 0.40, 0.45],
+                    "lambda_inst": [0.06, 0.08, 0.10],
                     "lambda_clu": [0.07, 0.075],
                     "fusion_min_weight": [0.20, 0.22, 0.25],
+                    "warmup_epochs": [25, 35, 45],
+                },
+                "dcgl_negative_args": {
+                    "dcgl_neg_tau": [0.5, 0.75, 1.0],
+                    "dcgl_neg_weight": [0.3, 0.4, 0.5, 0.6],
                 },
             },
         },
@@ -702,6 +773,13 @@ def _resolve_ae_graph_path(root_dir, dataset_name, ae_args):
     if graph_relpath:
         return root_dir / graph_relpath
     return root_dir / "data" / "ae_graph" / f"{dataset_name}_ae_graph.txt"
+
+
+def _resolve_ae_model_path(root_dir, dataset_name, ae_args):
+    model_relpath = str(ae_args.get("model_save_path", "")).strip()
+    if model_relpath:
+        return root_dir / model_relpath
+    return root_dir / "pretrain_graph" / f"{dataset_name}_ae_pretrain.pkl"
 
 
 def _seed_summary_text():
@@ -979,6 +1057,18 @@ def main():
         merged_train_args = _merge_args(CONFIG["train_common_args"], dataset_train_args)
         dataset_dual_attn_args = profile.get("dual_attn_args", {})
         merged_dual_attn_args = _merge_args(CONFIG.get("dual_attn_args", {}), dataset_dual_attn_args)
+        dataset_dcgl_negative_args = profile.get("dcgl_negative_args", {})
+        dataset_improved_module_args = dict(improved_module_args)
+        if dcgl_negative_enabled:
+            dataset_improved_module_args["enable_dcgl_negative_loss"] = True
+            dataset_improved_module_args.update(CONFIG.get("dcgl_negative_args", {}))
+            dataset_improved_module_args.update(dataset_dcgl_negative_args)
+        if dcgl_cluster_enabled:
+            dataset_improved_module_args["enable_dcgl_cluster_level"] = True
+            dataset_improved_module_args.update(CONFIG.get("dcgl_cluster_args", {}))
+        if gcn_backbone_enabled:
+            dataset_improved_module_args["enable_gcn_backbone"] = True
+            dataset_improved_module_args.update(CONFIG.get("gcn_backbone_args", {}))
         ### ---------------------------------------
         dataset_ae_args = profile.get("ae_args", {})
         ### <--- [MODIFIED] ---------------------------------------
@@ -1021,7 +1111,7 @@ def main():
                 "--dataset", dataset,
                 "--cluster_num", str(cluster_num),
                 "--graph_mode", "raw",
-            ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(improved_module_args)
+            ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(dataset_improved_module_args)
 
             baseline_result = _run_and_log(
                 name=f"{dataset}_baseline_raw",
@@ -1034,7 +1124,7 @@ def main():
                 dcgl_negative_enabled=dcgl_negative_enabled,
                 dcgl_cluster_enabled=dcgl_cluster_enabled,
                 gcn_backbone_enabled=gcn_backbone_enabled,
-                improved_module_args=improved_module_args,
+                improved_module_args=dataset_improved_module_args,
             )
             summary_lines.append(
                 f"  Baseline: rc={baseline_result['returncode']} elapsed={baseline_result['elapsed']:.2f}s "
@@ -1051,6 +1141,7 @@ def main():
                 merged_ae_args.pop("base_graph_path", None)
             ### ---------------------------------------
             ae_graph_path = _resolve_ae_graph_path(root_dir, dataset, merged_ae_args)
+            ae_model_path = _resolve_ae_model_path(root_dir, dataset, merged_ae_args)
 
             if reuse_existing_ae_results:
                 reuse_log_path = _write_note_log(
@@ -1060,8 +1151,9 @@ def main():
                         "MODE: REUSE_EXISTING_AE_RESULTS",
                         f"SEEDS: {_seed_summary_text()}",
                         f"AE_GRAPH_PATH: {ae_graph_path}",
+                        f"AE_MODEL_PATH: {ae_model_path}",
                         "AE_PRETRAIN_EXECUTION: SKIPPED",
-                        "NOTE: experiment.py reused the existing Ae graph and did not run data/pretrain_optimize_A_graph.py",
+                        "NOTE: experiment.py reused fixed AE preprocessing assets and did not run data/pretrain_optimize_A_graph.py",
                     ],
                 )
                 summary_lines.append(
@@ -1087,7 +1179,7 @@ def main():
                     dcgl_negative_enabled=dcgl_negative_enabled,
                     dcgl_cluster_enabled=dcgl_cluster_enabled,
                     gcn_backbone_enabled=gcn_backbone_enabled,
-                    improved_module_args=improved_module_args,
+                    improved_module_args=dataset_improved_module_args,
                 )
                 summary_lines.append(
                     f"  AE Pretrain: rc={pre_result['returncode']} elapsed={pre_result['elapsed']:.2f}s "
@@ -1127,7 +1219,8 @@ def main():
                     "--dataset", dataset,
                     "--cluster_num", str(cluster_num),
                     "--graph_mode", "ae",
-                ] + _dict_to_cli(merged_train_args) + _dict_to_cli(improved_module_args)
+                    "--ae_graph_path", str(ae_graph_path),
+                ] + _dict_to_cli(merged_train_args) + _dict_to_cli(dataset_improved_module_args)
 
                 ae_result = _run_and_log(
                     name=f"{dataset}_train_with_ae",
@@ -1140,7 +1233,7 @@ def main():
                     dcgl_negative_enabled=dcgl_negative_enabled,
                     dcgl_cluster_enabled=dcgl_cluster_enabled,
                     gcn_backbone_enabled=gcn_backbone_enabled,
-                    improved_module_args=improved_module_args,
+                    improved_module_args=dataset_improved_module_args,
                 )
                 summary_lines.append(
                     f"  AE Train: rc={ae_result['returncode']} elapsed={ae_result['elapsed']:.2f}s "
@@ -1155,8 +1248,9 @@ def main():
                     "--dataset", dataset,
                     "--cluster_num", str(cluster_num),
                     "--graph_mode", "dual",
+                    "--ae_graph_path", str(ae_graph_path),
                     "--fusion_mode", "mean",
-                ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(CONFIG["dual_args"]) + _dict_to_cli(CONFIG.get("dual_mean_args", {})) + _dict_to_cli(improved_module_args)
+                ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(CONFIG["dual_args"]) + _dict_to_cli(CONFIG.get("dual_mean_args", {})) + _dict_to_cli(dataset_improved_module_args)
 
                 dual_mean_result = _run_and_log(
                     name=f"{dataset}_train_with_dual_mean",
@@ -1169,7 +1263,7 @@ def main():
                     dcgl_negative_enabled=dcgl_negative_enabled,
                     dcgl_cluster_enabled=dcgl_cluster_enabled,
                     gcn_backbone_enabled=gcn_backbone_enabled,
-                    improved_module_args=improved_module_args,
+                    improved_module_args=dataset_improved_module_args,
                 )
                 summary_lines.append(
                     f"  Dual Mean Train: rc={dual_mean_result['returncode']} elapsed={dual_mean_result['elapsed']:.2f}s "
@@ -1184,8 +1278,9 @@ def main():
                     "--dataset", dataset,
                     "--cluster_num", str(cluster_num),
                     "--graph_mode", "dual",
+                    "--ae_graph_path", str(ae_graph_path),
                     "--fusion_mode", "attn",
-                ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(CONFIG["dual_args"]) + _dict_to_cli(merged_dual_attn_args) + _dict_to_cli(improved_module_args)
+                ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(CONFIG["dual_args"]) + _dict_to_cli(merged_dual_attn_args) + _dict_to_cli(dataset_improved_module_args)
 
                 dual_attn_result = _run_and_log(
                     name=f"{dataset}_train_with_dual_attn",
@@ -1198,7 +1293,7 @@ def main():
                     dcgl_negative_enabled=dcgl_negative_enabled,
                     dcgl_cluster_enabled=dcgl_cluster_enabled,
                     gcn_backbone_enabled=gcn_backbone_enabled,
-                    improved_module_args=improved_module_args,
+                    improved_module_args=dataset_improved_module_args,
                 )
                 summary_lines.append(
                     f"  Dual Attn Train: rc={dual_attn_result['returncode']} elapsed={dual_attn_result['elapsed']:.2f}s "
@@ -1236,5 +1331,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

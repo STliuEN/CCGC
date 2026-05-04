@@ -17,3 +17,4 @@ papers/
 .tmp_*
 data/full_dataset
 data/data/*
+gpushare/
