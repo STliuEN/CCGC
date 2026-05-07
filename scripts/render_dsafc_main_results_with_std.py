@@ -23,11 +23,16 @@ from scripts.render_dsafc_paper_figures import (
     FONT_SCALE,
     GROUP_GAP_RATIO,
     GROUP_LABEL_Y_OFFSET,
+    OURS_COLUMN_FILL,
     TABLE_ROW_SCALE,
     _font,
     _parse_float,
     _wrap,
+    collect_rank_styles,
     load_markdown_table,
+    load_local_reproduction_pairs,
+    ours_highlight_columns,
+    reorder_main_table_columns,
 )
 
 plt.rcParams.update(
@@ -352,6 +357,32 @@ def build_display_rows(columns: list[str], base_rows: list[list[str]]) -> list[l
     return display_rows
 
 
+def build_display_rows_with_local_marks(columns: list[str], base_rows: list[list[str]]) -> list[list[str]]:
+    local_repro_pairs = load_local_reproduction_pairs()
+    display_rows = build_display_rows(columns, base_rows)
+    current_dataset = ""
+    for row in display_rows:
+        if row[0]:
+            current_dataset = row[0]
+        dataset = current_dataset
+        for col_idx in range(2, len(columns)):
+            method = columns[col_idx]
+            if (dataset, method) not in local_repro_pairs:
+                continue
+            cell = row[col_idx]
+            if _parse_float(cell) is None or cell.endswith("*"):
+                continue
+            if "±" in cell:
+                value, std = cell.split("±", 1)
+                row[col_idx] = f"{value}*±{std}"
+            elif "¡À" in cell:
+                value, std = cell.split("¡À", 1)
+                row[col_idx] = f"{value}*¡À{std}"
+            else:
+                row[col_idx] = f"{cell}*"
+    return display_rows
+
+
 def render_table_with_display_rows(
     path: Path,
     columns: list[str],
@@ -369,8 +400,10 @@ def render_table_with_display_rows(
     group_col: int | None = None,
     bold_last_col: bool = False,
     bold_best: bool = False,
+    underline_second: bool = False,
     numeric_start_col: int = 2,
     col_aligns: list[str] | None = None,
+    highlight_col_fills: dict[int, str] | None = None,
 ) -> None:
     header_size = _font(header_size or font_size + 1.0)
     font_size = _font(font_size)
@@ -381,6 +414,7 @@ def render_table_with_display_rows(
     col_widths = [w / total_width for w in col_widths]
     wrap_widths = wrap_widths or [18] * n_cols
     col_aligns = col_aligns or ["center"] * n_cols
+    highlight_col_fills = highlight_col_fills or {}
 
     wrapped_rows = [[_wrap(cell, wrap_widths[i]) for i, cell in enumerate(row)] for row in display_rows]
     row_heights = []
@@ -426,6 +460,19 @@ def render_table_with_display_rows(
             group_line_positions.append(y_row_bottom - gap / 2)
         y_cursor = y_row_bottom - gap
 
+    for c_idx, fill in highlight_col_fills.items():
+        if 0 <= c_idx < n_cols:
+            ax.add_patch(
+                plt.Rectangle(
+                    (x_edges[c_idx], y_bottom),
+                    x_edges[c_idx + 1] - x_edges[c_idx],
+                    y_top - y_bottom,
+                    facecolor=fill,
+                    edgecolor="none",
+                    zorder=0,
+                )
+            )
+
     ax.plot([0, 1], [y_top, y_top], color="black", lw=1.45, solid_capstyle="butt")
     ax.plot([0, 1], [y_header_bottom, y_header_bottom], color="black", lw=1.05, solid_capstyle="butt")
     ax.plot([0, 1], [y_bottom, y_bottom], color="black", lw=1.45, solid_capstyle="butt")
@@ -448,17 +495,12 @@ def render_table_with_display_rows(
             fontweight="bold",
         )
 
-    bold_cells: set[tuple[int, int]] = set()
-    if bold_best:
-        for r_idx, row in enumerate(base_rows):
-            values = [_parse_float(v) for v in row[numeric_start_col:]]
-            values = [v for v in values if v is not None]
-            if values:
-                best = max(values)
-                for c_idx in range(numeric_start_col, n_cols):
-                    val = _parse_float(row[c_idx])
-                    if val is not None and math.isclose(val, best, rel_tol=0.0, abs_tol=1e-9):
-                        bold_cells.add((r_idx, c_idx))
+    bold_cells, underline_cells = collect_rank_styles(
+        base_rows,
+        numeric_start_col=numeric_start_col,
+        bold_best=bold_best,
+        underline_second=underline_second,
+    )
 
     group_spans: list[tuple[str, int, int]] = []
     if group_col is not None:
@@ -503,6 +545,19 @@ def render_table_with_display_rows(
                 fontweight=weight,
                 linespacing=1.18,
             )
+            if (r_idx, c_idx) in underline_cells:
+                cell_width = x_edges[c_idx + 1] - x_edges[c_idx]
+                if ha == "left":
+                    x0 = x_edges[c_idx] + 0.012
+                    x1 = min(x_edges[c_idx + 1] - 0.012, x0 + cell_width * 0.56)
+                elif ha == "right":
+                    x1 = x_edges[c_idx + 1] - 0.012
+                    x0 = max(x_edges[c_idx] + 0.012, x1 - cell_width * 0.56)
+                else:
+                    x0 = x_centers[c_idx] - cell_width * 0.23
+                    x1 = x_centers[c_idx] + cell_width * 0.23
+                y_line = y_mid - row_heights[r_idx] * 0.18
+                ax.plot([x0, x1], [y_line, y_line], color="black", lw=1.05, solid_capstyle="butt")
 
     for label, start, end in group_spans:
         c_idx = group_col
@@ -533,12 +588,14 @@ def render_table_with_display_rows(
 
 def main() -> None:
     columns, base_rows = load_markdown_table("Table 4-2 Main Clustering Results", group_col=0)
-    display_rows = build_display_rows(columns, base_rows)
+    columns, base_rows = reorder_main_table_columns(columns, base_rows)
+    display_rows = build_display_rows_with_local_marks(columns, base_rows)
     render_table_with_display_rows(
         OUTPUT,
         columns,
         base_rows,
         display_rows,
+        highlight_col_fills=ours_highlight_columns(columns),
         col_widths=[1.25, 0.85] + [1.0] * (len(columns) - 2),
         wrap_widths=[14, 8] + [12] * (len(columns) - 2),
         fig_width=30,
@@ -549,6 +606,7 @@ def main() -> None:
         vertical_after=(0, 1),
         group_col=0,
         bold_best=True,
+        underline_second=True,
         numeric_start_col=2,
     )
     print(OUTPUT)

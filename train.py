@@ -551,6 +551,8 @@ parser.add_argument('--save_embedding_path', type=str, default='',
                     help='optional npz path for saving the best embedding, labels, predictions, and metrics')
 parser.add_argument('--save_embedding_method', type=str, default='',
                     help='method label stored in --save_embedding_path')
+parser.add_argument('--save_fusion_weights_path', type=str, default='',
+                    help='optional npz path for saving best-ACC dual-view fusion weights and branch embeddings')
 ### ---------------------------------------
 args = parser.parse_args()
 
@@ -623,6 +625,7 @@ nmi_list = []
 ari_list = []
 f1_list = []
 best_export = None
+best_fusion_export = None
 
 for run_idx in range(args.runs):
 
@@ -853,6 +856,21 @@ for run_idx in range(args.runs):
                         "pred": np.asarray(predict_labels, dtype=np.int64),
                         "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
                     }
+                if args.graph_mode == 'dual' and args.save_fusion_weights_path:
+                    best_fusion_export = {
+                        "seed": seed,
+                        "epoch": epoch,
+                        "fusion_weights": fusion_weights_eval.detach().cpu().numpy(),
+                        "fusion_mean": fusion_mean_eval.detach().cpu().numpy(),
+                        "hidden_a": hidden_emb_a.detach().cpu().numpy(),
+                        "hidden_ae": hidden_emb_ae.detach().cpu().numpy(),
+                        "embedding": hidden_emb.detach().cpu().numpy(),
+                        "labels": np.asarray(true_labels, dtype=np.int64),
+                        "pred": np.asarray(predict_labels, dtype=np.int64),
+                        "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
+                        "graph_mode": np.asarray(args.graph_mode),
+                        "fusion_mode": np.asarray(args.fusion_mode),
+                    }
             ### <--- [MODIFIED] ---------------------------------------
             if args.graph_mode == 'dual':
                 pbar.set_postfix({
@@ -919,3 +937,26 @@ if args.save_embedding_path:
         fusion_mode=np.asarray(args.fusion_mode),
     )
     print(f"Saved embedding: {save_path}")
+
+if args.save_fusion_weights_path and args.graph_mode == 'dual':
+    if best_fusion_export is None:
+        raise RuntimeError("save_fusion_weights_path was requested, but no dual-view fusion state was captured.")
+    save_path = Path(args.save_fusion_weights_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        save_path,
+        fusion_weights=best_fusion_export["fusion_weights"].astype(np.float32),
+        fusion_mean=best_fusion_export["fusion_mean"].astype(np.float32),
+        hidden_a=best_fusion_export["hidden_a"].astype(np.float32),
+        hidden_ae=best_fusion_export["hidden_ae"].astype(np.float32),
+        embedding=best_fusion_export["embedding"].astype(np.float32),
+        labels=best_fusion_export["labels"],
+        pred=best_fusion_export["pred"],
+        metrics=best_fusion_export["metrics"],
+        dataset=np.asarray(args.dataset),
+        seed=np.asarray(best_fusion_export["seed"], dtype=np.int64),
+        epoch=np.asarray(best_fusion_export["epoch"], dtype=np.int64),
+        graph_mode=best_fusion_export["graph_mode"],
+        fusion_mode=best_fusion_export["fusion_mode"],
+    )
+    print(f"Saved fusion weights: {save_path}")

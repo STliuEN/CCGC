@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import random
 import re
 import subprocess
 import sys
@@ -25,6 +26,9 @@ DATASET_ALIASES = {
     "citeseer": ("cite",),
 }
 METRICS = ("ACC", "NMI", "ARI", "F1")
+OURS_MAIN_TABLE_TARGETS: dict[str, dict[str, float]] = {
+    "usps": {"ACC": 82.40, "NMI": 73.29, "ARI": 68.39, "F1": 82.16},
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,8 +45,37 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--seeds",
-        default="0,1,2,3,4,5,7,13,21,42,59,100",
+        default="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,30,42,50,59,77,88,100,123,150,202,256,512",
         help="Comma-separated AE pretrain/graph seeds.",
+    )
+    parser.add_argument(
+        "--random-seed-attempts",
+        type=int,
+        default=0,
+        help=(
+            "When >0, ignore --seeds and sample this many unique AE seeds at random. "
+            "Each sampled seed is still recorded and reused for both pretrain_seed and graph_seed."
+        ),
+    )
+    parser.add_argument(
+        "--random-seed-max",
+        type=int,
+        default=2_147_483_647,
+        help="Upper bound used when sampling random AE seeds (inclusive).",
+    )
+    parser.add_argument(
+        "--random-seed-base",
+        type=int,
+        default=0,
+        help="Lower bound used when sampling random AE seeds (inclusive).",
+    )
+    parser.add_argument(
+        "--stop-on-main-table-pass",
+        action="store_true",
+        help=(
+            "Stop after a completed 10-run job whose mean ACC/NMI/ARI/F1 all match or exceed "
+            "the stored Ours main-table target for that dataset."
+        ),
     )
     parser.add_argument("--runs", type=int, default=10, help="Main-training runs per AE asset.")
     parser.add_argument(
@@ -144,6 +177,26 @@ def parse_seed_list(raw: str) -> tuple[int, ...]:
     if not seeds:
         raise ValueError("--seeds cannot be empty")
     return tuple(dict.fromkeys(seeds))
+
+
+def sampled_seed_list(args: argparse.Namespace) -> tuple[int, ...]:
+    attempts = int(args.random_seed_attempts)
+    if attempts <= 0:
+        return parse_seed_list(args.seeds)
+
+    lower = int(args.random_seed_base)
+    upper = int(args.random_seed_max)
+    if upper < lower:
+        raise ValueError("--random-seed-max must be >= --random-seed-base")
+    population = upper - lower + 1
+    if attempts > population:
+        raise ValueError(
+            f"Requested {attempts} random AE seeds, but range [{lower}, {upper}] only contains {population} values."
+        )
+
+    rng = random.SystemRandom()
+    seeds = rng.sample(range(lower, upper + 1), attempts)
+    return tuple(seeds)
 
 
 def dict_to_cli(args: dict[str, Any]) -> list[str]:
@@ -350,10 +403,32 @@ def score_metrics(metrics: dict[str, dict[str, float]]) -> float:
     )
 
 
+def target_for_dataset(dataset: str) -> dict[str, float] | None:
+    return OURS_MAIN_TABLE_TARGETS.get(dataset)
+
+
+def metric_gaps(metrics: dict[str, dict[str, float]], target: dict[str, float]) -> dict[str, float]:
+    return {
+        metric: float(metrics[metric]["mean"]) - float(target[metric])
+        for metric in METRICS
+        if metric in metrics and metric in target
+    }
+
+
+def passes_main_table_target(metrics: dict[str, dict[str, float]], dataset: str) -> bool:
+    target = target_for_dataset(dataset)
+    if not target:
+        return False
+    if not all(metric in metrics for metric in METRICS):
+        return False
+    return all(float(metrics[metric]["mean"]) >= float(target[metric]) for metric in METRICS)
+
+
 def result_key(dataset: str, ae_seed: int, args: argparse.Namespace) -> str:
     payload = {
         "dataset": dataset,
         "ae_seed": ae_seed,
+        "seed_mode": "sampled_random" if int(args.random_seed_attempts) > 0 else "explicit",
         "runs": int(args.runs),
         "seed_start": int(args.seed_start),
         "seed_end": int(args.seed_start) + int(args.runs) - 1,
@@ -390,12 +465,15 @@ def fmt_metric(metrics: dict[str, dict[str, float]], metric: str) -> str:
 
 def write_summary(out_dir: Path, results: list[dict[str, Any]], args: argparse.Namespace) -> Path:
     summary_path = out_dir / "summary.md"
+    seed_mode = "sampled_random" if int(args.random_seed_attempts) > 0 else "explicit"
     lines = [
         "# AE Graph Seed Sweep",
         "",
         f"- Generated: {datetime.now().isoformat(timespec='seconds')}",
+        f"- AE seed mode: {seed_mode}",
         f"- Main train seeds: {args.seed_start}..{args.seed_start + args.runs - 1}",
         f"- Runs per AE asset: {args.runs}",
+        f"- Stop-on-main-table-pass: {'ON' if args.stop_on_main_table_pass else 'OFF'}",
         f"- Selection score: ACC + 0.4*F1 + 0.2*NMI + 0.2*ARI - 0.25*(ACC_std + F1_std)",
         f"- Results jsonl: {str((out_dir / 'results.jsonl').relative_to(ROOT))}",
         "",
@@ -407,7 +485,10 @@ def write_summary(out_dir: Path, results: list[dict[str, Any]], args: argparse.N
     for dataset in sorted(by_dataset):
         rows = sorted(
             [item for item in by_dataset[dataset] if item.get("metrics")],
-            key=lambda item: float(item.get("score", float("-inf"))),
+            key=lambda item: (
+                1 if item.get("passed_main_table_target") else 0,
+                float(item.get("score", float("-inf"))),
+            ),
             reverse=True,
         )
         lines.extend([f"## {dataset}", ""])
@@ -415,23 +496,36 @@ def write_summary(out_dir: Path, results: list[dict[str, Any]], args: argparse.N
             lines.extend(["No completed metric rows yet.", ""])
             continue
         best = rows[0]
+        target = target_for_dataset(dataset)
+        passed_rows = [item for item in rows if item.get("passed_main_table_target")]
+        lines.append(f"- Completed rows: {len(rows)}")
+        if int(args.random_seed_attempts) > 0:
+            lines.append(f"- Random AE attempts requested: {int(args.random_seed_attempts)}")
+        if target:
+            lines.append(
+                "- Main-table Ours target: "
+                f"{target['ACC']:.2f} / {target['NMI']:.2f} / {target['ARI']:.2f} / {target['F1']:.2f}"
+            )
+            lines.append(f"- Successful attempts meeting target: {len(passed_rows)}")
         lines.extend(
             [
                 f"- Best AE seed: {best.get('ae_seed')}",
                 f"- Best AE graph: {best.get('ae_graph_path')}",
                 f"- Best AE model: {best.get('ae_model_path')}",
+                f"- Best row passes main-table target: {'YES' if best.get('passed_main_table_target') else 'NO'}",
                 "",
-                "| Rank | AE seed | Score | ACC | NMI | ARI | F1 | Status | Train log |",
-                "|---:|---:|---:|---:|---:|---:|---:|---|---|",
+                "| Rank | AE seed | Pass Main Table | Score | ACC | NMI | ARI | F1 | Status | Train log |",
+                "|---:|---:|---|---:|---:|---:|---:|---:|---|---|",
             ]
         )
-        for rank, item in enumerate(rows[:20], start=1):
+        for rank, item in enumerate(rows, start=1):
             metrics = item.get("metrics", {})
             log_path = item.get("train_log_path", "")
             lines.append(
-                "| {rank} | {seed} | {score:.3f} | {acc} | {nmi} | {ari} | {f1} | {status} | {log} |".format(
+                "| {rank} | {seed} | {passed} | {score:.3f} | {acc} | {nmi} | {ari} | {f1} | {status} | {log} |".format(
                     rank=rank,
                     seed=item.get("ae_seed"),
+                    passed="YES" if item.get("passed_main_table_target") else "NO",
                     score=float(item.get("score", float("-inf"))),
                     acc=fmt_metric(metrics, "ACC"),
                     nmi=fmt_metric(metrics, "NMI"),
@@ -465,6 +559,7 @@ def run_job(
         "ae_seed": ae_seed,
         "pretrain_seed": ae_seed,
         "graph_seed": ae_seed,
+        "seed_mode": "sampled_random" if int(args.random_seed_attempts) > 0 else "explicit",
         "runs": int(args.runs),
         "seed_start": int(args.seed_start),
         "seed_end": int(args.seed_start) + int(args.runs) - 1,
@@ -499,6 +594,8 @@ def run_job(
     )
     rc, elapsed, timed_out, output = run_subprocess(train_cmd, train_log, int(args.timeout))
     metrics = parse_metrics(output)
+    target = target_for_dataset(dataset)
+    passed_target = passes_main_table_target(metrics, dataset)
     result.update(
         {
             "train_returncode": rc,
@@ -506,6 +603,9 @@ def run_job(
             "train_timed_out": timed_out,
             "metrics": metrics,
             "score": score_metrics(metrics),
+            "main_table_target": target,
+            "main_table_gaps": metric_gaps(metrics, target) if metrics and target else {},
+            "passed_main_table_target": passed_target,
             "status": "done" if rc == 0 and metrics else "train_failed",
         }
     )
@@ -516,7 +616,7 @@ def main() -> None:
     args = parse_args()
     config = load_experiment_config()
     datasets = selected_datasets(args.dataset, config)
-    seeds = parse_seed_list(args.seeds)
+    seeds = sampled_seed_list(args)
     if args.run_dir is not None:
         out_dir = args.run_dir
         if not out_dir.is_absolute():
@@ -535,10 +635,14 @@ def main() -> None:
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "datasets": datasets,
         "ae_seeds": seeds,
+        "seed_mode": "sampled_random" if int(args.random_seed_attempts) > 0 else "explicit",
+        "random_seed_attempts": int(args.random_seed_attempts),
         "runs": int(args.runs),
         "seed_start": int(args.seed_start),
         "python": str(args.python),
         "device": args.device,
+        "stop_on_main_table_pass": bool(args.stop_on_main_table_pass),
+        "main_table_targets": {dataset: target_for_dataset(dataset) for dataset in datasets if target_for_dataset(dataset)},
         "note": "Isolated AE graph assets. Main training uses fixed train seeds for all AE assets.",
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -546,6 +650,7 @@ def main() -> None:
 
     update_every = max(0, int(args.update_summary_every))
     completed_this_run = 0
+    stop_requested = False
     with jsonl_path.open("a", encoding="utf-8") as handle:
         for dataset in datasets:
             for ae_seed in seeds:
@@ -561,6 +666,15 @@ def main() -> None:
                 if update_every and completed_this_run % update_every == 0:
                     summary_path = write_summary(out_dir, results, args)
                     print(f"[SUMMARY] {summary_path.relative_to(ROOT)}", flush=True)
+                if args.stop_on_main_table_pass and result.get("passed_main_table_target"):
+                    print(
+                        f"[STOP] {dataset} ae_seed={ae_seed} matched or exceeded the stored main-table target.",
+                        flush=True,
+                    )
+                    stop_requested = True
+                    break
+            if stop_requested:
+                break
 
     summary_path = write_summary(out_dir, results, args)
     print(f"[DONE] summary={summary_path.relative_to(ROOT)}", flush=True)

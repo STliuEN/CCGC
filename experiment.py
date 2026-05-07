@@ -161,15 +161,14 @@ CONFIG = {
             "cluster_num": 10,
             "train_args": {
                 ### <--- [MODIFIED] ---------------------------------------
-                # Roll back to the stabler main-train step size observed in earlier effective runs.
+                # Main-table USPS center keeps the standard 1e-4 train step.
                 "lr": 1e-4,
                 ### ---------------------------------------
             },
             "ae_args": {
                 "base_graph_path": "data/graph/usps5_graph.txt",
                 ### <--- [MODIFIED] ---------------------------------------
-                # Keep USPS latent dim aligned with 10 classes under the unified
-                # 30-epoch AE pretrain setting.
+                # Main-table USPS row used the default project AE graph asset.
                 "epochs": 30,
                 "lr": 1e-3,
                 "n_z": 10,
@@ -233,7 +232,7 @@ CONFIG = {
                 "fusion_hidden": 64,
                 "fusion_temp": 1.6,
                 "fusion_balance": 0.25,
-                "lambda_inst": 0.08,
+                "lambda_inst": 0.06,
                 "lambda_clu": 0.06,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.15,
@@ -519,8 +518,10 @@ CONFIG = {
             "cluster_num": 4,
             "train_args": {
                 ### <--- [MODIFIED] ---------------------------------------
-                # CCGC original dataset: keep the paper-aligned main-train lr.
+                # Final selected stable combo keeps the standard train center
+                # but uses a slightly lower threshold for the dual-attn run.
                 "lr": 1e-4,
+                "threshold": 0.36,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -537,12 +538,12 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 2.0,
-                "fusion_balance": 0.35,
+                "fusion_temp": 1.6,
+                "fusion_balance": 0.22,
                 "lambda_inst": 0.08,
-                "lambda_clu": 0.08,
-                "warmup_epochs": 35,
-                "fusion_min_weight": 0.20,
+                "lambda_clu": 0.05,
+                "warmup_epochs": 32,
+                "fusion_min_weight": 0.005,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -598,8 +599,12 @@ CONFIG = {
             "cluster_num": 4,
             "train_args": {
                 ### <--- [MODIFIED] ---------------------------------------
-                # CCGC original dataset: keep the paper-aligned main-train lr.
-                "lr": 1e-4,
+                # Final selected stable combo uses a slightly longer horizon,
+                # higher propagation depth, and a mild alpha reduction.
+                "t": 5,
+                "epochs": 500,
+                "lr": 1.2e-4,
+                "alpha": 0.45,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -614,16 +619,16 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.9,
+                "fusion_temp": 1.8,
                 "fusion_balance": 0.35,
-                "lambda_inst": 0.08,
-                "lambda_clu": 0.07,
+                "lambda_inst": 0.09,
+                "lambda_clu": 0.09,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.20,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
-                "dcgl_neg_weight": 0.4,
+                "dcgl_neg_weight": 0.6,
             },
             "safe_tuning_grid": {
                 "train_args": {
