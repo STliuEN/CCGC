@@ -135,11 +135,20 @@ class DualViewAttention(nn.Module):
         return weights
 
 
-def fuse_dual_views(hidden_a, hidden_ae, fusion_mode="mean", fusion_module=None):
+def fuse_dual_views(hidden_a, hidden_ae, fusion_mode="mean", fusion_module=None, fixed_raw_weight=0.5):
     if fusion_mode == "attn":
         if fusion_module is None:
             raise ValueError("fusion_module must be provided when fusion_mode='attn'.")
         weights = fusion_module(hidden_a, hidden_ae)
+    elif fusion_mode == "fixed":
+        raw_weight = min(1.0, max(0.0, float(fixed_raw_weight)))
+        weights = torch.empty(
+            (hidden_a.shape[0], 2),
+            dtype=hidden_a.dtype,
+            device=hidden_a.device
+        )
+        weights[:, 0] = raw_weight
+        weights[:, 1] = 1.0 - raw_weight
     else:
         weights = torch.full(
             (hidden_a.shape[0], 2),

@@ -655,6 +655,7 @@ def main() -> int:
         for variant in variants:
             cached = resume_rows.get((dataset, variant.key))
             if cached is not None:
+                print(f"[SKIP] {dataset}/{variant.key} cached", flush=True)
                 dataset_row["variants"][variant.key] = cached
                 continue
 
@@ -684,6 +685,7 @@ def main() -> int:
                 dataset_row["variants"][variant.key] = row
                 continue
 
+            print(f"[RUN] {dataset}/{variant.key} runs={args.runs} seed_start={args.seed_start}", flush=True)
             rc, stdout, stderr = run_command(cmd, cwd=ROOT, timeout=args.timeout)
             log_path.write_text(
                 "\n".join(
@@ -725,6 +727,7 @@ def main() -> int:
 
             dataset_row["variants"][variant.key] = row
             append_jsonl(results_jsonl, row)
+            print(f"[{row['status'].upper()}] {dataset}/{variant.key} score={row['score']:.2f}", flush=True)
 
         dataset_rows.append(dataset_row)
 

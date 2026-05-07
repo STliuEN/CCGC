@@ -527,8 +527,10 @@ parser.add_argument('--lambda_clu', type=float, default=0.2,
                     help='weight of cluster-distribution alignment for dual mode')
 parser.add_argument('--dist_tau', type=float, default=0.5,
                     help='temperature for cluster-distribution alignment in dual mode')
-parser.add_argument('--fusion_mode', type=str, default='mean', choices=['mean', 'attn'],
-                    help="dual-view fusion strategy: fixed mean or learnable attention")
+parser.add_argument('--fusion_mode', type=str, default='mean', choices=['mean', 'fixed', 'attn'],
+                    help="dual-view fusion strategy: fixed mean, explicit fixed raw/AE weight, or learnable attention")
+parser.add_argument('--fixed_raw_weight', type=float, default=0.5,
+                    help='raw-graph branch weight when --fusion_mode fixed; AE weight is 1-fixed_raw_weight')
 parser.add_argument('--fusion_hidden', type=int, default=128,
                     help='hidden size of attention fusion MLP when fusion_mode=attn')
 parser.add_argument('--fusion_temp', type=float, default=1.0,
@@ -567,6 +569,7 @@ if args.enable_improved_ccgc:
     args.enable_ema_prototypes = True
 
 args.fusion_min_weight = min(0.49, max(0.0, float(args.fusion_min_weight)))
+args.fixed_raw_weight = min(1.0, max(0.0, float(args.fixed_raw_weight)))
 args.branch_bias_cap = min(0.49, max(0.0, float(args.branch_bias_cap)))
 args.dynamic_threshold_start = min(0.999, max(1e-6, float(args.dynamic_threshold_start)))
 args.dynamic_threshold_end = min(0.999, max(1e-6, float(args.dynamic_threshold_end)))
@@ -626,6 +629,7 @@ ari_list = []
 f1_list = []
 best_export = None
 best_fusion_export = None
+last_fusion_export = None
 
 for run_idx in range(args.runs):
 
@@ -716,7 +720,8 @@ for run_idx in range(args.runs):
                 hidden_emb_a,
                 hidden_emb_ae,
                 fusion_mode=args.fusion_mode,
-                fusion_module=fusion_module
+                fusion_module=fusion_module,
+                fixed_raw_weight=args.fixed_raw_weight,
             )
             fusion_mean = torch.mean(fusion_weights, dim=0)
             w_a = fusion_mean[0]
@@ -823,7 +828,8 @@ for run_idx in range(args.runs):
                     hidden_emb_a,
                     hidden_emb_ae,
                     fusion_mode=args.fusion_mode,
-                    fusion_module=fusion_module
+                    fusion_module=fusion_module,
+                    fixed_raw_weight=args.fixed_raw_weight,
                 )
                 fusion_mean_eval = torch.mean(fusion_weights_eval, dim=0)
             else:
@@ -836,6 +842,21 @@ for run_idx in range(args.runs):
                 hidden_emb = (z1 + z2) / 2
 
             acc, nmi, ari, f1, predict_labels, dis = clustering(hidden_emb, true_labels, args.cluster_num)
+            if args.graph_mode == 'dual' and args.save_fusion_weights_path:
+                last_fusion_export = {
+                    "seed": seed,
+                    "epoch": epoch,
+                    "fusion_weights": fusion_weights_eval.detach().cpu().numpy(),
+                    "fusion_mean": fusion_mean_eval.detach().cpu().numpy(),
+                    "hidden_a": hidden_emb_a.detach().cpu().numpy(),
+                    "hidden_ae": hidden_emb_ae.detach().cpu().numpy(),
+                    "embedding": hidden_emb.detach().cpu().numpy(),
+                    "labels": np.asarray(true_labels, dtype=np.int64),
+                    "pred": np.asarray(predict_labels, dtype=np.int64),
+                    "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
+                    "graph_mode": np.asarray(args.graph_mode),
+                    "fusion_mode": np.asarray(args.fusion_mode),
+                }
             ### <--- [MODIFIED] ---------------------------------------
             predict_labels_t = torch.from_numpy(predict_labels).to(args.device)
             dis = dis.to(args.device)
@@ -857,20 +878,7 @@ for run_idx in range(args.runs):
                         "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
                     }
                 if args.graph_mode == 'dual' and args.save_fusion_weights_path:
-                    best_fusion_export = {
-                        "seed": seed,
-                        "epoch": epoch,
-                        "fusion_weights": fusion_weights_eval.detach().cpu().numpy(),
-                        "fusion_mean": fusion_mean_eval.detach().cpu().numpy(),
-                        "hidden_a": hidden_emb_a.detach().cpu().numpy(),
-                        "hidden_ae": hidden_emb_ae.detach().cpu().numpy(),
-                        "embedding": hidden_emb.detach().cpu().numpy(),
-                        "labels": np.asarray(true_labels, dtype=np.int64),
-                        "pred": np.asarray(predict_labels, dtype=np.int64),
-                        "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
-                        "graph_mode": np.asarray(args.graph_mode),
-                        "fusion_mode": np.asarray(args.fusion_mode),
-                    }
+                    best_fusion_export = last_fusion_export
             ### <--- [MODIFIED] ---------------------------------------
             if args.graph_mode == 'dual':
                 pbar.set_postfix({
@@ -939,6 +947,8 @@ if args.save_embedding_path:
     print(f"Saved embedding: {save_path}")
 
 if args.save_fusion_weights_path and args.graph_mode == 'dual':
+    if best_fusion_export is None:
+        best_fusion_export = last_fusion_export
     if best_fusion_export is None:
         raise RuntimeError("save_fusion_weights_path was requested, but no dual-view fusion state was captured.")
     save_path = Path(args.save_fusion_weights_path)
