@@ -146,6 +146,37 @@ def _dcgl_center_contrastive_negative_loss(centers_1, centers_2, temperature, ro
     row_weights = row_weights.to(loss12.dtype)
     row_weights = torch.clamp(row_weights, min=0.0, max=1.0)
     return 0.5 * (torch.mean(row_weights * loss12) + torch.mean(row_weights * loss21))
+
+
+def _offdiag_center_mse_negative_loss(centers_1, centers_2):
+    s = centers_1 @ centers_2.T
+    s = s - torch.diag_embed(torch.diag(s))
+    return F.mse_loss(s, torch.zeros_like(s))
+
+
+def _smooth_reliability_gate(scores, threshold=0.55, power=2.0, min_gate=0.0):
+    threshold_t = torch.tensor(float(threshold), dtype=scores.dtype, device=scores.device)
+    denom = torch.clamp(1.0 - threshold_t, min=1e-6)
+    gate = torch.clamp((scores - threshold_t) / denom, min=0.0, max=1.0)
+    gate = gate.pow(max(1e-6, float(power)))
+    min_gate_t = torch.tensor(float(min_gate), dtype=scores.dtype, device=scores.device)
+    min_gate_t = torch.clamp(min_gate_t, min=0.0, max=1.0)
+    return min_gate_t + (1.0 - min_gate_t) * gate
+
+
+def _legacy_dcgl_negative_row_weights(reliability_scores):
+    if reliability_scores.numel() > 1:
+        reliability_std = torch.std(reliability_scores, unbiased=False)
+    else:
+        reliability_std = torch.tensor(0.0, dtype=reliability_scores.dtype, device=reliability_scores.device)
+
+    conservative_floor = torch.minimum(
+        torch.tensor(0.6, dtype=reliability_scores.dtype, device=reliability_scores.device),
+        torch.mean(reliability_scores) - 0.5 * reliability_std
+    )
+    conservative_floor = torch.clamp(conservative_floor, min=0.35, max=0.6)
+    badness = torch.relu(conservative_floor - reliability_scores) / torch.clamp(conservative_floor, min=1e-6)
+    return (1.0 - 0.25 * badness.pow(2)).detach()
 ### ---------------------------------------
 
 
@@ -203,7 +234,11 @@ def _ccgc_confidence_loss(
     ema_momentum=0.9,
     use_dcgl_negative=False,
     dcgl_neg_tau=0.5,
-    dcgl_neg_weight=1.0
+    dcgl_neg_weight=1.0,
+    use_dcgl_reliability_gate=True,
+    dcgl_neg_gate_threshold=0.55,
+    dcgl_neg_gate_power=2.0,
+    dcgl_neg_gate_min=0.0
 ):
     if high_confidence_idx.numel() == 0:
         return None
@@ -310,36 +345,42 @@ def _ccgc_confidence_loss(
     centers_1 = F.normalize(centers_1_t, dim=1, p=2)
     centers_2 = F.normalize(centers_2_t, dim=1, p=2)
     ### <--- [MODIFIED] ---------------------------------------
+    base_neg_contrastive = _offdiag_center_mse_negative_loss(centers_1, centers_2)
+    neg_weight = 1.0
     if use_dcgl_negative:
-        # Conservative reliability-aware gating:
-        # keep the original negative strength for most clusters, and only
-        # mildly down-weight obviously unreliable ones.
         if reliability_scores is None:
             reliability_scores = torch.ones(centers_1.shape[0], dtype=centers_1.dtype, device=centers_1.device)
-        if reliability_scores.numel() > 1:
-            reliability_std = torch.std(reliability_scores, unbiased=False)
+        if use_dcgl_reliability_gate:
+            cluster_gate = _smooth_reliability_gate(
+                reliability_scores,
+                threshold=dcgl_neg_gate_threshold,
+                power=dcgl_neg_gate_power,
+                min_gate=dcgl_neg_gate_min,
+            ).detach()
+            global_gate = torch.clamp(torch.mean(cluster_gate), min=0.0, max=1.0)
+            dcgl_neg_contrastive = _dcgl_center_contrastive_negative_loss(
+                centers_1,
+                centers_2,
+                temperature=dcgl_neg_tau,
+                row_weights=cluster_gate
+            )
+            # Reliability gate semantics:
+            # low reliability should fall back to the A-DSF objective, not to a
+            # weakened/replaced negative. DCGL-negative is therefore an extra
+            # gated separation term on top of the base off-diagonal center loss.
+            neg_contrastive = base_neg_contrastive + global_gate * float(dcgl_neg_weight) * dcgl_neg_contrastive
         else:
-            reliability_std = torch.tensor(0.0, dtype=reliability_scores.dtype, device=reliability_scores.device)
-
-        conservative_floor = torch.minimum(
-            torch.tensor(0.6, dtype=reliability_scores.dtype, device=reliability_scores.device),
-            torch.mean(reliability_scores) - 0.5 * reliability_std
-        )
-        conservative_floor = torch.clamp(conservative_floor, min=0.35, max=0.6)
-        badness = torch.relu(conservative_floor - reliability_scores) / torch.clamp(conservative_floor, min=1e-6)
-        reliability_scores = (1.0 - 0.25 * badness.pow(2)).detach()
-        neg_contrastive = _dcgl_center_contrastive_negative_loss(
-            centers_1,
-            centers_2,
-            temperature=dcgl_neg_tau,
-            row_weights=reliability_scores
-        )
+            legacy_weights = _legacy_dcgl_negative_row_weights(reliability_scores)
+            neg_contrastive = _dcgl_center_contrastive_negative_loss(
+                centers_1,
+                centers_2,
+                temperature=dcgl_neg_tau,
+                row_weights=legacy_weights
+            )
+            neg_weight = float(dcgl_neg_weight)
     else:
-        S = centers_1 @ centers_2.T
-        S_diag = torch.diag_embed(torch.diag(S))
-        S = S - S_diag
-        neg_contrastive = F.mse_loss(S, torch.zeros_like(S))
-    return pos_contrastive + alpha * float(dcgl_neg_weight) * neg_contrastive
+        neg_contrastive = base_neg_contrastive
+    return pos_contrastive + alpha * neg_weight * neg_contrastive
     ### ---------------------------------------
 
 
@@ -501,6 +542,14 @@ parser.add_argument('--dcgl_neg_tau', type=float, default=0.5,
                     help='temperature for DCGL-style center-level negative contrast')
 parser.add_argument('--dcgl_neg_weight', type=float, default=1.0,
                     help='weight multiplier for DCGL-style negative term')
+parser.add_argument('--disable_dcgl_neg_reliability_gate', action='store_true',
+                    help='disable reliability-gated DCGL negative and use the legacy conservative row-weighted DCGL negative')
+parser.add_argument('--dcgl_neg_gate_threshold', type=float, default=0.55,
+                    help='cluster reliability threshold for gradually enabling DCGL negative contrast')
+parser.add_argument('--dcgl_neg_gate_power', type=float, default=2.0,
+                    help='power of the smooth reliability gate for DCGL negative contrast')
+parser.add_argument('--dcgl_neg_gate_min', type=float, default=0.0,
+                    help='minimum gate value for the extra DCGL negative contrast; 0 makes low-reliability states use only the base negative')
 parser.add_argument('--enable_dcgl_cluster_level', action='store_true',
                     help='enable DCGL-style cluster-level contrastive alignment for dual-view mode')
 parser.add_argument('--lambda_dcgl_cluster', type=float, default=0.1,
@@ -575,6 +624,9 @@ args.dynamic_threshold_start = min(0.999, max(1e-6, float(args.dynamic_threshold
 args.dynamic_threshold_end = min(0.999, max(1e-6, float(args.dynamic_threshold_end)))
 args.ema_proto_momentum = min(0.999, max(0.0, float(args.ema_proto_momentum)))
 args.dcgl_neg_tau = max(1e-6, float(args.dcgl_neg_tau))
+args.dcgl_neg_gate_threshold = min(0.999, max(0.0, float(args.dcgl_neg_gate_threshold)))
+args.dcgl_neg_gate_power = max(1e-6, float(args.dcgl_neg_gate_power))
+args.dcgl_neg_gate_min = min(1.0, max(0.0, float(args.dcgl_neg_gate_min)))
 args.dcgl_cluster_tau = max(1e-6, float(args.dcgl_cluster_tau))
 args.gcn_dropout = min(0.99, max(0.0, float(args.gcn_dropout)))
 ### ---------------------------------------
@@ -737,6 +789,10 @@ for run_idx in range(args.runs):
                     use_dcgl_negative=args.enable_dcgl_negative_loss,
                     dcgl_neg_tau=args.dcgl_neg_tau,
                     dcgl_neg_weight=args.dcgl_neg_weight,
+                    use_dcgl_reliability_gate=not args.disable_dcgl_neg_reliability_gate,
+                    dcgl_neg_gate_threshold=args.dcgl_neg_gate_threshold,
+                    dcgl_neg_gate_power=args.dcgl_neg_gate_power,
+                    dcgl_neg_gate_min=args.dcgl_neg_gate_min,
                 )
                 loss_ae = _ccgc_confidence_loss(
                     z1_ae, z2_ae, predict_labels_t, high_confidence_idx, args.cluster_num, args.alpha,
@@ -746,6 +802,10 @@ for run_idx in range(args.runs):
                     use_dcgl_negative=args.enable_dcgl_negative_loss,
                     dcgl_neg_tau=args.dcgl_neg_tau,
                     dcgl_neg_weight=args.dcgl_neg_weight,
+                    use_dcgl_reliability_gate=not args.disable_dcgl_neg_reliability_gate,
+                    dcgl_neg_gate_threshold=args.dcgl_neg_gate_threshold,
+                    dcgl_neg_gate_power=args.dcgl_neg_gate_power,
+                    dcgl_neg_gate_min=args.dcgl_neg_gate_min,
                 )
                 if loss_a is None or loss_ae is None:
                     continue
@@ -798,6 +858,10 @@ for run_idx in range(args.runs):
                     use_dcgl_negative=args.enable_dcgl_negative_loss,
                     dcgl_neg_tau=args.dcgl_neg_tau,
                     dcgl_neg_weight=args.dcgl_neg_weight,
+                    use_dcgl_reliability_gate=not args.disable_dcgl_neg_reliability_gate,
+                    dcgl_neg_gate_threshold=args.dcgl_neg_gate_threshold,
+                    dcgl_neg_gate_power=args.dcgl_neg_gate_power,
+                    dcgl_neg_gate_min=args.dcgl_neg_gate_min,
                 )
                 if loss_single is None:
                     continue

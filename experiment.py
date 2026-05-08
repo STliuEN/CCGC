@@ -29,7 +29,7 @@ CONFIG = {
     # 1) Fast switch: edit only this list.
     # Example: ["acm"], ["usps"], ["acm", "usps"], ["acm","dblp","usps","reut","hhar","amap", "bat", "cite", "cora", "eat", "pubmed", "uat"]，corafull is too slow for quick tests, so it's not in the default list.
 
-    "active_datasets": ["reut", "uat", "amap", "usps", "eat", "cora", "cite"],
+    "active_datasets": ["reut", "uat", "amap", "usps", "cora", "cite"],
 
     # 2) Compare modes: baseline / ae / dual(shared A+AE)
     "run_baseline": False,
@@ -63,7 +63,14 @@ CONFIG = {
     "enable_dcgl_negative_module": True,
     "dcgl_negative_args": {
         "dcgl_neg_tau": 0.5,
-        "dcgl_neg_weight": 0.6
+        "dcgl_neg_weight": 0.6,
+        # Reliability-gated negative separation is the default internal
+        # iteration. Dataset profiles can set
+        # `disable_dcgl_neg_reliability_gate=True` to reproduce the earlier
+        # row-weighted DCGL-negative frontier when that is empirically stronger.
+        "dcgl_neg_gate_threshold": 0.55,
+        "dcgl_neg_gate_power": 2.0,
+        "dcgl_neg_gate_min": 0.0,
     },
     "enable_dcgl_cluster_module": False,
         "dcgl_cluster_args": {
@@ -188,6 +195,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
+                "disable_dcgl_neg_reliability_gate": True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -240,6 +248,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.3,
+                "disable_dcgl_neg_reliability_gate": True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -317,6 +326,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
+                "disable_dcgl_neg_reliability_gate": True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -407,6 +417,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
+                "disable_dcgl_neg_reliability_gate": True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -629,6 +640,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
+                "disable_dcgl_neg_reliability_gate": True,
             },
             "safe_tuning_grid": {
                 "train_args": {

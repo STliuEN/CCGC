@@ -16,24 +16,40 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = ROOT / "experiment_output" / "fixed_fusion_weight_ablation"
+RAW_TABLES = ROOT / "docs" / "DSAFC_raw_tables.md"
 SCGC_ENV_PYTHON = Path(r"C:\Users\stern\anaconda3\envs\SCGC_1\python.exe")
 DEFAULT_PYTHON = SCGC_ENV_PYTHON if SCGC_ENV_PYTHON.exists() else Path(sys.executable)
 METRICS = ("ACC", "NMI", "ARI", "F1")
+FUSION_DOMINANCE_TOL = 0.05
 DATASET_ALIASES = {
     "reuters": "reut",
     "reut": "reut",
+    "uat": "uat",
     "amap": "amap",
+    "usps": "usps",
+    "cora": "cora",
+    "cite": "cite",
+    "citeseer": "cite",
 }
+DATASET_LABELS = {
+    "reut": "Reuters",
+    "uat": "UAT",
+    "amap": "AMAP",
+    "usps": "USPS",
+    "cora": "Cora",
+    "cite": "Citeseer",
+}
+DATASET_ORDER = ("reut", "uat", "amap", "usps", "cora", "cite")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run fixed raw/AE fusion-weight curves on Reuters and AMAP, "
+            "Run fixed raw/AE fusion-weight curves on selected datasets, "
             "with dynamic attention as the adaptive reference."
         )
     )
-    parser.add_argument("--datasets", default="reut,amap")
+    parser.add_argument("--datasets", default="reut,uat,amap,usps,cora,cite")
     parser.add_argument("--weights", default="0,0.1,0.25,0.5,0.75,0.9,1")
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--seed-start", type=int, default=0)
@@ -49,6 +65,7 @@ def parse_args() -> argparse.Namespace:
         help="no_dcgl isolates fusion; dcgl uses the final DSAFC negative term; both runs both sets.",
     )
     parser.add_argument("--no-dynamic", action="store_true", help="Only run fixed weights, without attention baselines.")
+    parser.add_argument("--update-raw-tables", action="store_true", help="Update docs/DSAFC_raw_tables.md Table 4-5a from this run.")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -172,6 +189,7 @@ def build_train_command(
         "--save_fusion_weights_path",
         str(fusion_npz),
     ]
+    cmd.extend(dict_to_cli(train_args))
     cmd.extend(dict_to_cli(config.get("dual_args", {})))
     if fusion_mode == "fixed":
         cmd.extend(["--fixed_raw_weight", f"{float(fixed_raw_weight):.6f}"])
@@ -180,7 +198,6 @@ def build_train_command(
         cmd.extend(dict_to_cli(merge_args(config.get("dual_attn_args", {}), profile.get("dual_attn_args", {}))))
     else:
         raise ValueError(f"Unsupported fusion mode: {fusion_mode}")
-    cmd.extend(dict_to_cli(train_args))
     cmd.extend(dict_to_cli(build_module_args(config, profile, enable_dcgl=enable_dcgl)))
     return cmd
 
@@ -221,11 +238,16 @@ def fusion_diag(path: Path, *, fallback_raw_weight: float | None = None) -> dict
         weights = np.asarray(data["fusion_weights"], dtype=np.float32)
         fusion_mean = np.asarray(data["fusion_mean"], dtype=np.float32)
         entropy = -np.sum(weights * np.log(np.clip(weights, 1e-12, 1.0)), axis=1)
+        mean_diff = float(fusion_mean[0]) - float(fusion_mean[1])
+        if abs(mean_diff) < FUSION_DOMINANCE_TOL:
+            dominant_view = "balanced"
+        else:
+            dominant_view = "raw" if mean_diff > 0 else "ae"
         return {
             "mean_alpha_raw": float(np.mean(weights[:, 0])),
             "mean_alpha_ae": float(np.mean(weights[:, 1])),
             "mean_entropy": float(np.mean(entropy)),
-            "dominant_view": "raw" if float(fusion_mean[0]) >= float(fusion_mean[1]) else "ae",
+            "dominant_view": dominant_view,
         }
     if fallback_raw_weight is None:
         return {}
@@ -240,7 +262,7 @@ def fusion_diag(path: Path, *, fallback_raw_weight: float | None = None) -> dict
         "mean_alpha_raw": raw,
         "mean_alpha_ae": ae,
         "mean_entropy": entropy,
-        "dominant_view": "raw" if raw >= ae else "ae",
+        "dominant_view": "balanced" if abs(raw - ae) < FUSION_DOMINANCE_TOL else ("raw" if raw > ae else "ae"),
     }
 
 
@@ -305,7 +327,7 @@ def write_summary(run_dir: Path, rows: list[dict[str, Any]], *, datasets: tuple[
     (run_dir / "summary.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def maybe_plot(run_dir: Path, rows: list[dict[str, Any]]) -> None:
+def maybe_plot(run_dir: Path, rows: list[dict[str, Any]], datasets: tuple[str, ...]) -> None:
     if not any(row.get("status") == "ok" for row in rows):
         return
     try:
@@ -318,8 +340,26 @@ def maybe_plot(run_dir: Path, rows: list[dict[str, Any]]) -> None:
 
     ok_rows = [row for row in rows if row["status"] == "ok"]
     for metric in ("ACC", "score"):
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=False)
-        for ax, dataset in zip(axes, ("reut", "amap")):
+        all_values: list[float] = []
+        for row in ok_rows:
+            metrics = row.get("metrics") or {}
+            if metric == "score":
+                all_values.append(float(row["score"]))
+            elif metric in metrics:
+                all_values.append(float(metrics[metric]["mean"]))
+        y_limits: tuple[float, float] | None = None
+        if all_values:
+            y_min = min(all_values)
+            y_max = max(all_values)
+            pad = max(2.0, (y_max - y_min) * 0.08)
+            y_limits = (y_min - pad, y_max + pad)
+        n_cols = 3 if len(datasets) > 1 else 1
+        n_rows = int(math.ceil(len(datasets) / n_cols))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.9 * n_cols, 4.3 * n_rows), sharey=False, squeeze=False)
+        axes_arr = axes.ravel()
+        legend_handles: list[Any] = []
+        legend_labels: list[str] = []
+        for ax, dataset in zip(axes_arr, datasets):
             for enable_dcgl, color in ((False, "#4c78a8"), (True, "#f58518")):
                 fixed = [
                     row for row in ok_rows
@@ -330,7 +370,10 @@ def maybe_plot(run_dir: Path, rows: list[dict[str, Any]]) -> None:
                     x = [float(row["fixed_raw_weight"]) for row in fixed]
                     y = [float(row["score"] if metric == "score" else row["metrics"][metric]["mean"]) for row in fixed]
                     label = "fixed + DCGL" if enable_dcgl else "fixed"
-                    ax.plot(x, y, marker="o", color=color, label=label)
+                    line, = ax.plot(x, y, marker="o", color=color, label=label)
+                    if label not in legend_labels:
+                        legend_handles.append(line)
+                        legend_labels.append(label)
                 dynamic = [
                     row for row in ok_rows
                     if row["dataset"] == dataset and row["setting"] == "dynamic" and row["enable_dcgl"] == enable_dcgl
@@ -340,18 +383,138 @@ def maybe_plot(run_dir: Path, rows: list[dict[str, Any]]) -> None:
                     x = float(diag.get("mean_alpha_raw", 0.5))
                     y = float(row["score"] if metric == "score" else row["metrics"][metric]["mean"])
                     label = "dynamic + DCGL" if enable_dcgl else "dynamic"
-                    ax.scatter([x], [y], marker="*", s=160, color=color, edgecolor="black", label=label)
-            ax.set_title(dataset)
+                    scatter = ax.scatter(
+                        [x],
+                        [y],
+                        marker="o",
+                        s=150,
+                        facecolor="white",
+                        edgecolor=color,
+                        linewidth=2.2,
+                        label=label,
+                        zorder=4,
+                    )
+                    ax.scatter([x], [y], marker="o", s=42, facecolor="black", edgecolor="black", linewidth=0.0, zorder=5)
+                    if label not in legend_labels:
+                        legend_handles.append(scatter)
+                        legend_labels.append(label)
+            ax.set_title(DATASET_LABELS.get(dataset, dataset))
             ax.set_xlabel("Raw-graph weight")
             ax.set_ylabel("Score" if metric == "score" else metric)
             ax.grid(True, alpha=0.25)
             ax.set_xlim(-0.03, 1.03)
-            handles, labels = ax.get_legend_handles_labels()
-            if handles:
-                ax.legend(handles, labels, fontsize=8)
-        fig.tight_layout()
+            if y_limits is not None:
+                ax.set_ylim(*y_limits)
+        for ax in axes_arr[len(datasets):]:
+            ax.axis("off")
+        if legend_handles:
+            fig.legend(
+                legend_handles,
+                legend_labels,
+                loc="upper center",
+                ncol=min(4, len(legend_handles)),
+                frameon=False,
+                bbox_to_anchor=(0.5, 1.02),
+            )
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
         fig.savefig(run_dir / f"{metric.lower()}_fixed_weight_curve.png", dpi=220)
         plt.close(fig)
+
+
+def split_md_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def find_section(lines: list[str], title: str) -> tuple[int, int]:
+    start = None
+    for idx, line in enumerate(lines):
+        if line.strip() in {f"## {title}", f"### {title}"}:
+            start = idx
+            break
+    if start is None:
+        raise ValueError(f"Section not found: {title}")
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith("## ") or stripped.startswith("### "):
+            end = idx
+            break
+    return start, end
+
+
+def find_table(lines: list[str], section_title: str) -> tuple[int, int]:
+    start, end = find_section(lines, section_title)
+    table_start = None
+    for idx in range(start + 1, end):
+        if lines[idx].strip().startswith("|"):
+            table_start = idx
+            break
+    if table_start is None:
+        raise ValueError(f"Table not found in section: {section_title}")
+    table_end = table_start
+    while table_end < end and lines[table_end].strip().startswith("|"):
+        table_end += 1
+    return table_start, table_end
+
+
+def rel(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def sort_row(row: dict[str, Any]) -> tuple[int, int, float]:
+    dataset_order = {dataset: idx for idx, dataset in enumerate(DATASET_ORDER)}
+    fixed_weight = row.get("fixed_raw_weight")
+    fixed_value = -1.0 if fixed_weight is None else float(fixed_weight)
+    return dataset_order.get(str(row.get("dataset")), 999), int(bool(row.get("enable_dcgl"))), fixed_value
+
+
+def build_raw_table(rows: list[dict[str, Any]], run_dir: Path) -> list[str]:
+    ok_rows = [row for row in rows if row.get("status") == "ok"]
+    ok_rows.sort(key=sort_row)
+    lines = [
+        "| Dataset | Variant | $w_A$ | DCGL-negative | ACC | NMI | ARI | F1 | Score | Learned/used $w_A$ |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in ok_rows:
+        metrics = row["metrics"]
+        diag = row.get("fusion_diag", {})
+        fixed_weight = row.get("fixed_raw_weight")
+        fixed_text = "--" if fixed_weight is None else f"{float(fixed_weight):.2f}"
+        used_raw = diag.get("mean_alpha_raw")
+        used_raw_text = "--" if used_raw is None else f"{float(used_raw):.4f}"
+        variant = "Fixed" if row.get("setting") == "fixed" else str(row.get("label", "Dynamic"))
+        dataset = DATASET_LABELS.get(str(row["dataset"]), str(row["dataset"]))
+        lines.append(
+            f"| {dataset} | {variant} | {fixed_text} | {row['enable_dcgl']} | "
+            f"{metrics['ACC']['mean']:.2f}+-{metrics['ACC']['std']:.2f} | "
+            f"{metrics['NMI']['mean']:.2f}+-{metrics['NMI']['std']:.2f} | "
+            f"{metrics['ARI']['mean']:.2f}+-{metrics['ARI']['std']:.2f} | "
+            f"{metrics['F1']['mean']:.2f}+-{metrics['F1']['std']:.2f} | "
+            f"{row['score']:.2f} | {used_raw_text} |"
+        )
+    return lines
+
+
+def update_raw_tables(raw_path: Path, run_dir: Path, rows: list[dict[str, Any]]) -> None:
+    lines = raw_path.read_text(encoding="utf-8").splitlines()
+    section_title = "Table 4-5a Fixed Fusion Weight Ablation"
+    start, _ = find_section(lines, section_title)
+    table_start, table_end = find_table(lines, section_title)
+    intro = [
+        f"## {section_title}",
+        "",
+        "This table records the fixed raw-graph fusion weight sweep on the six final datasets.",
+        "It is used in the KBS-version Section 4.4 to support the claim that a single manually fixed fusion ratio is not portable across datasets.",
+        f"The source log is `{rel(run_dir / 'summary.md')}`.",
+        "`w_A` denotes the raw-graph weight; the refined-graph weight is `1-w_A`.",
+        "",
+    ]
+    new_lines = lines[:start] + intro + build_raw_table(rows, run_dir) + lines[table_end:]
+    raw_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+    print(f"[UPDATED] {raw_path}")
 
 
 def main() -> int:
@@ -466,7 +629,9 @@ def main() -> int:
 
     write_summary(run_dir, rows, datasets=datasets, weights=weights, args=args)
     if not args.dry_run:
-        maybe_plot(run_dir, rows)
+        maybe_plot(run_dir, rows, datasets)
+        if args.update_raw_tables:
+            update_raw_tables(RAW_TABLES, run_dir, rows)
     manifest = {
         "generated_at": datetime.now().isoformat(),
         "datasets": list(datasets),

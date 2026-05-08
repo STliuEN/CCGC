@@ -569,6 +569,130 @@ def render_ablation_acc_chart(path: Path, columns: list[str], rows: list[list[st
     plt.close(fig)
 
 
+def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[list[str]]) -> None:
+    column_index = {column: idx for idx, column in enumerate(columns)}
+    required = {"Dataset", "Variant", "$w_A$", "DCGL-negative", "ACC", "Score", "Learned/used $w_A$"}
+    missing = required.difference(column_index)
+    if missing:
+        raise ValueError(f"Fixed fusion table is missing columns: {', '.join(sorted(missing))}")
+
+    datasets = list(dict.fromkeys(row[column_index["Dataset"]] for row in rows if row[column_index["Dataset"]]))
+    if not datasets:
+        raise ValueError("Fixed fusion table has no dataset rows.")
+
+    n_cols = 3 if len(datasets) > 1 else 1
+    n_rows = int(math.ceil(len(datasets) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.35 * n_cols, 4.55 * n_rows), sharey=False, squeeze=False)
+    axes_arr = axes.ravel()
+    colors = {False: "#4E79A7", True: "#E15759"}
+    legend_handles = []
+    legend_labels = []
+    all_scores = [_parse_float(row[column_index["Score"]]) for row in rows]
+    valid_scores = [score for score in all_scores if score is not None]
+    y_limits: tuple[float, float] | None = None
+    if valid_scores:
+        y_min = float(min(valid_scores))
+        y_max = float(max(valid_scores))
+        pad = max(2.0, (y_max - y_min) * 0.08)
+        y_limits = (y_min - pad, y_max + pad)
+
+    for ax, dataset in zip(axes_arr, datasets):
+        dataset_rows = [row for row in rows if row[column_index["Dataset"]] == dataset]
+        for dcgl_flag in (False, True):
+            fixed_rows = [
+                row
+                for row in dataset_rows
+                if row[column_index["Variant"]] == "Fixed"
+                and row[column_index["DCGL-negative"]].strip().lower() == str(dcgl_flag).lower()
+            ]
+            fixed_points: list[tuple[float, float]] = []
+            for row in fixed_rows:
+                weight = _parse_float(row[column_index["$w_A$"]])
+                score = _parse_float(row[column_index["Score"]])
+                if weight is not None and score is not None:
+                    fixed_points.append((weight, score))
+            if fixed_points:
+                fixed_points.sort()
+                label = "Fixed + DCGL" if dcgl_flag else "Fixed"
+                line, = ax.plot(
+                    [point[0] for point in fixed_points],
+                    [point[1] for point in fixed_points],
+                    marker="o",
+                    lw=1.8,
+                    color=colors[dcgl_flag],
+                    label=label,
+                )
+                if label not in legend_labels:
+                    legend_handles.append(line)
+                    legend_labels.append(label)
+
+            dynamic_rows = [
+                row
+                for row in dataset_rows
+                if row[column_index["Variant"]] != "Fixed"
+                and row[column_index["DCGL-negative"]].strip().lower() == str(dcgl_flag).lower()
+            ]
+            for row in dynamic_rows:
+                weight = _parse_float(row[column_index["Learned/used $w_A$"]])
+                score = _parse_float(row[column_index["Score"]])
+                if weight is None or score is None:
+                    continue
+                label = "Adaptive + DCGL" if dcgl_flag else "Adaptive"
+                scatter = ax.scatter(
+                    [weight],
+                    [score],
+                    marker="o",
+                    s=170,
+                    facecolor="white",
+                    edgecolor=colors[dcgl_flag],
+                    linewidth=2.2,
+                    label=label,
+                    zorder=4,
+                )
+                ax.scatter(
+                    [weight],
+                    [score],
+                    marker="o",
+                    s=42,
+                    facecolor="black",
+                    edgecolor="black",
+                    linewidth=0.0,
+                    zorder=5,
+                )
+                if label not in legend_labels:
+                    legend_handles.append(scatter)
+                    legend_labels.append(label)
+
+        ax.set_title(dataset, fontsize=_font(15.0), pad=8)
+        ax.set_xlabel(r"Raw-graph weight $w_A$", fontsize=_font(13.5))
+        ax.set_ylabel("Composite score", fontsize=_font(13.5))
+        ax.grid(axis="y", color="#d8d8d8", linewidth=0.8, alpha=0.8)
+        ax.set_axisbelow(True)
+        ax.set_xlim(-0.03, 1.03)
+        if y_limits is not None:
+            ax.set_ylim(*y_limits)
+        for spine in ("top", "right", "left"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color("#8a8a8a")
+        ax.tick_params(axis="both", labelsize=_font(12.0))
+    for ax in axes_arr[len(datasets):]:
+        ax.axis("off")
+
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            ncol=min(4, len(legend_handles)),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            frameon=False,
+            fontsize=_font(12.2),
+        )
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
+    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig)
+
+
 def render_method_positioning_table(path: Path) -> None:
     rows = [
         ["Deep graph clustering", "DAEGC, SDCN, DFCN", "No / partial", "No", "No / partial", "No"],
@@ -821,76 +945,55 @@ def main() -> None:
         ablation_acc_rows,
     )
 
-    structure_columns, structure_rows = load_markdown_table("Table 4-4 Structure Diagnosis")
+    structure_columns, structure_rows = load_markdown_table("Table 4-4 Structure-Fusion Reliability Diagnosis")
     structure_columns, structure_rows = select_columns(
         structure_columns,
         structure_rows,
         [
             "Dataset",
-            r"$\lvert E_A\rvert$",
-            r"$\lvert E_E\rvert$",
             "Edge overlap",
             "New-edge ratio",
             "Homophily$(A)$",
             "Homophily$(A_E)$",
+            r"$\Delta$ homophily",
+            r"Mean $\alpha^{(A)}$",
+            r"Mean $\alpha^{(A_E)}$",
+            "Weight entropy",
+            "View tendency",
         ],
         display_columns=[
             "Dataset",
-            r"$|E_A|$",
-            r"$|E_E|$",
             "Edge\noverlap",
             "New-edge\nratio",
             "Homophily\n$(A)$",
             "Homophily\n$(A_E)$",
-        ],
-    )
-    render_table(
-        ASSETS / "DSAFC_structure_diagnosis.png",
-        structure_columns,
-        structure_rows,
-        col_widths=[1.65, 1.32, 1.32, 1.55, 1.58, 1.62, 1.68],
-        wrap_widths=[14, 10, 10, 12, 12, 12, 12],
-        fig_width=17.2,
-        font_size=13.8,
-        header_size=15.4,
-        row_unit=0.48,
-        header_unit=0.82,
-        vertical_after=(0, 2),
-        numeric_start_col=1,
-    )
-
-    fusion_columns, fusion_rows = load_markdown_table("Table 4-5 Fusion Weight Diagnosis")
-    fusion_columns, fusion_rows = select_columns(
-        fusion_columns,
-        fusion_rows,
-        [
-            "Dataset",
-            r"Mean $\alpha^{(A)}$",
-            r"Mean $\alpha^{(A_E)}$",
-            "Weight entropy",
-            "Dominant view",
-        ],
-        display_columns=[
-            "Dataset",
+            r"$\Delta$" + "\nhomophily",
             r"Mean $\alpha^{(A)}$",
             r"Mean $\alpha^{(A_E)}$",
             "Weight\nentropy",
-            "Dominant\nview",
+            "View\ntendency",
         ],
     )
     render_table(
-        ASSETS / "DSAFC_fusion_weight_diagnosis.png",
-        fusion_columns,
-        fusion_rows,
-        col_widths=[1.7, 1.85, 1.95, 1.55, 1.5],
-        wrap_widths=[14, 16, 16, 12, 12],
-        fig_width=14.8,
-        font_size=14.0,
-        header_size=15.2,
+        ASSETS / "DSAFC_structure_fusion_reliability_diagnosis.png",
+        structure_columns,
+        structure_rows,
+        col_widths=[1.45, 1.25, 1.3, 1.38, 1.44, 1.34, 1.5, 1.58, 1.25, 1.35],
+        wrap_widths=[14, 12, 12, 12, 12, 12, 15, 15, 12, 12],
+        fig_width=22.4,
+        font_size=12.5,
+        header_size=13.9,
         row_unit=0.48,
         header_unit=0.82,
-        vertical_after=(0,),
+        vertical_after=(0, 5),
         numeric_start_col=1,
+    )
+
+    fixed_fusion_columns, fixed_fusion_rows = load_markdown_table("Table 4-5a Fixed Fusion Weight Ablation")
+    render_fixed_fusion_weight_chart(
+        ASSETS / "DSAFC_fixed_fusion_weight_ablation.png",
+        fixed_fusion_columns,
+        fixed_fusion_rows,
     )
 
     hyper_rows = []

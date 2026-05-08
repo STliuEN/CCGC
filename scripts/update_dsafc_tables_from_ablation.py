@@ -30,6 +30,7 @@ DATASET_LABELS = {
     "citeseer": "Citeseer",
 }
 DATASET_ORDER = ("Reuters", "UAT", "AMAP", "USPS", "EAT", "Cora", "Citeseer")
+FUSION_DOMINANCE_TOL = 0.05
 
 
 def parse_args() -> argparse.Namespace:
@@ -116,6 +117,13 @@ def metric_cell(value: dict[str, Any]) -> str:
 
 def mean_cell(value: dict[str, Any]) -> str:
     return f"{float(value['mean']):.2f}"
+
+
+def dominance_label(raw_weight: float, ae_weight: float, *, tol: float = FUSION_DOMINANCE_TOL) -> str:
+    diff = float(raw_weight) - float(ae_weight)
+    if abs(diff) < tol:
+        return "Balanced"
+    return "Raw" if diff > 0 else "AE"
 
 
 def load_manifest(run_dir: Path) -> dict[str, Any]:
@@ -312,14 +320,73 @@ def build_fusion_table(
         diag = results[dataset]["dsafc"].get("fusion_diag")
         if not diag:
             raise ValueError(f"Missing DSAFC fusion diagnostics for {dataset}.")
-        dominant = str(diag["dominant_view"])
-        dominant = {"raw": "Raw", "ae": "AE", "balanced": "Balanced"}.get(dominant, dominant)
+        dominant = dominance_label(float(diag["mean_alpha_raw"]), float(diag["mean_alpha_ae"]))
         lines.append(
             f"| {dataset} | DSAFC | {float(diag['mean_alpha_raw']):.4f} | "
             f"{float(diag['mean_alpha_ae']):.4f} | {float(diag['mean_entropy']):.4f} | "
             f"{dominant} | {src} |"
         )
     return lines
+
+
+def build_structure_fusion_table(
+    structure: dict[str, dict[str, Any]],
+    results: dict[str, dict[str, dict[str, Any]]],
+    run_dir: Path,
+    dataset_order: tuple[str, ...],
+) -> list[str]:
+    lines = [
+        "| Dataset | Edge overlap | New-edge ratio | Homophily$(A)$ | Homophily$(A_E)$ | $\\Delta$ homophily | Mean $\\alpha^{(A)}$ | Mean $\\alpha^{(A_E)}$ | Weight entropy | View tendency | Source |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+    ]
+    src = source_path(run_dir)
+    for dataset in dataset_order:
+        diag = structure[dataset]
+        fusion = results[dataset]["dsafc"].get("fusion_diag")
+        if not fusion:
+            raise ValueError(f"Missing DSAFC fusion diagnostics for {dataset}.")
+        hom_raw = float(diag["homophily_raw"])
+        hom_ae = float(diag["homophily_ae"])
+        alpha_raw = float(fusion["mean_alpha_raw"])
+        alpha_ae = float(fusion["mean_alpha_ae"])
+        lines.append(
+            f"| {dataset} | {float(diag['edge_overlap_ratio']):.4f} | "
+            f"{float(diag['new_edge_ratio']):.4f} | {hom_raw:.4f} | {hom_ae:.4f} | "
+            f"{(hom_ae - hom_raw):+.4f} | {alpha_raw:.4f} | {alpha_ae:.4f} | "
+            f"{float(fusion['mean_entropy']):.4f} | {dominance_label(alpha_raw, alpha_ae)} | {src} |"
+        )
+    return lines
+
+
+def replace_diagnosis_tables(lines: list[str], table_lines: list[str]) -> list[str]:
+    titles = (
+        "Table 4-4 Structure Diagnosis",
+        "Table 4-5 Fusion Weight Diagnosis",
+        "Table 4-4 Structure-Fusion Reliability Diagnosis",
+    )
+    spans: list[tuple[int, int]] = []
+    for title in titles:
+        try:
+            spans.append(find_section(lines, title))
+        except ValueError:
+            continue
+
+    section = [
+        "## Table 4-4 Structure-Fusion Reliability Diagnosis",
+        "",
+        "This merged table combines post-hoc graph-structure diagnostics and exported DSAFC fusion weights.",
+        "The view tendency uses a 0.05 tolerance: nearly equal mean weights are reported as `Balanced`.",
+        "",
+        *table_lines,
+        "",
+    ]
+    if spans:
+        start = min(span[0] for span in spans)
+        end = max(span[1] for span in spans)
+        return lines[:start] + section + lines[end:]
+
+    _, insert_at = find_section(lines, "Figure 4-1 ACC Plot Data")
+    return lines[:insert_at] + ["", *section] + lines[insert_at:]
 
 
 def main() -> int:
@@ -342,8 +409,7 @@ def main() -> int:
     lines = replace_table(lines, "Table 4-3 Ablation Results", build_ablation_table(results, dataset_order))
     lines = replace_table(lines, "Table 4-3 DSAFC Source Index", build_dsafc_source_table(results, run_dir, dataset_order))
     lines = replace_table(lines, "Figure 4-1 ACC Plot Data", build_acc_plot_table(results, dataset_order))
-    lines = replace_table(lines, "Table 4-4 Structure Diagnosis", build_structure_table(structure, run_dir, dataset_order))
-    lines = replace_table(lines, "Table 4-5 Fusion Weight Diagnosis", build_fusion_table(results, run_dir, dataset_order))
+    lines = replace_diagnosis_tables(lines, build_structure_fusion_table(structure, results, run_dir, dataset_order))
 
     output = "\n".join(lines).rstrip() + "\n"
     if args.dry_run:

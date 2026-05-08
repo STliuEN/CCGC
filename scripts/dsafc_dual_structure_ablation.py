@@ -29,6 +29,7 @@ ABLATION_LABELS = {
     "a_dsf": "A-DSF",
     "dsafc": "DSAFC",
 }
+FUSION_DOMINANCE_TOL = 0.05
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,8 @@ def build_module_args(config: dict[str, Any], profile: dict[str, Any], *, enable
         improved["enable_dcgl_negative_loss"] = True
         improved.update(config.get("dcgl_negative_args", {}))
         improved.update(profile.get("dcgl_negative_args", {}))
+        if improved.pop("disable_dcgl_neg_reliability_gate", False):
+            improved["disable_dcgl_neg_reliability_gate"] = True
     if dcgl_cluster_enabled:
         improved["enable_dcgl_cluster_level"] = True
         improved.update(config.get("dcgl_cluster_args", {}))
@@ -456,7 +459,13 @@ def compute_fusion_diag(fusion_npz: Path) -> dict[str, Any]:
     weights = np.asarray(data["fusion_weights"], dtype=np.float32)
     fusion_mean = np.asarray(data["fusion_mean"], dtype=np.float32)
     entropy = -np.sum(weights * np.log(np.clip(weights, 1e-12, 1.0)), axis=1)
-    dominant = np.where(weights[:, 0] >= weights[:, 1], "raw", "ae")
+    diff = weights[:, 0] - weights[:, 1]
+    dominant = np.where(np.abs(diff) < FUSION_DOMINANCE_TOL, "balanced", np.where(diff > 0, "raw", "ae"))
+    mean_diff = float(fusion_mean[0]) - float(fusion_mean[1])
+    if abs(mean_diff) < FUSION_DOMINANCE_TOL:
+        dominant_view = "balanced"
+    else:
+        dominant_view = "raw" if mean_diff > 0 else "ae"
     return {
         "mean_alpha_raw": float(np.mean(weights[:, 0])),
         "mean_alpha_ae": float(np.mean(weights[:, 1])),
@@ -464,9 +473,10 @@ def compute_fusion_diag(fusion_npz: Path) -> dict[str, Any]:
         "std_alpha_ae": float(np.std(weights[:, 1])),
         "mean_entropy": float(np.mean(entropy)),
         "std_entropy": float(np.std(entropy)),
-        "dominant_view": "raw" if float(fusion_mean[0]) >= float(fusion_mean[1]) else "ae",
+        "dominant_view": dominant_view,
         "dominant_raw_ratio": float(np.mean(dominant == "raw")),
         "dominant_ae_ratio": float(np.mean(dominant == "ae")),
+        "dominant_balanced_ratio": float(np.mean(dominant == "balanced")),
     }
 
 
@@ -480,8 +490,9 @@ def fixed_mean_fusion_diag() -> dict[str, Any]:
         "mean_entropy": float(entropy),
         "std_entropy": 0.0,
         "dominant_view": "balanced",
-        "dominant_raw_ratio": 1.0,
+        "dominant_raw_ratio": 0.0,
         "dominant_ae_ratio": 0.0,
+        "dominant_balanced_ratio": 1.0,
     }
 
 
@@ -518,6 +529,7 @@ def build_train_command(
         "--device",
         args.device,
     ]
+    cmd.extend(dict_to_cli(train_args))
 
     if variant.graph_mode == "ae":
         cmd.extend(["--ae_graph_path", str(ae_graph_path)])
@@ -537,7 +549,6 @@ def build_train_command(
                 cmd.extend(["--save_fusion_weights_path", str(fusion_npz_path)])
         elif variant.fusion_mode == "mean":
             cmd.extend(dict_to_cli(config.get("dual_mean_args", {})))
-    cmd.extend(dict_to_cli(train_args))
     cmd.extend(dict_to_cli(module_args))
     return cmd
 
@@ -610,13 +621,15 @@ def write_summary(
         if fusion_rows:
             lines.append("### Fusion Weight Diagnosis")
             lines.append("")
-            lines.append("| Variant | mean alpha(A) | mean alpha(A_E) | mean entropy | dominant view | raw-dom ratio | ae-dom ratio |")
-            lines.append("| --- | ---: | ---: | ---: | --- | ---: | ---: |")
+            lines.append("| Variant | mean alpha(A) | mean alpha(A_E) | mean entropy | dominant view | raw-dom ratio | balanced ratio | ae-dom ratio |")
+            lines.append("| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |")
             for label, diag_row in fusion_rows:
                 lines.append(
                     f"| {label} | {diag_row['mean_alpha_raw']:.4f} | {diag_row['mean_alpha_ae']:.4f} | "
                     f"{diag_row['mean_entropy']:.4f} | {diag_row['dominant_view']} | "
-                    f"{diag_row['dominant_raw_ratio']:.4f} | {diag_row['dominant_ae_ratio']:.4f} |"
+                    f"{diag_row['dominant_raw_ratio']:.4f} | "
+                    f"{diag_row.get('dominant_balanced_ratio', 0.0):.4f} | "
+                    f"{diag_row['dominant_ae_ratio']:.4f} |"
                 )
             lines.append("")
 
