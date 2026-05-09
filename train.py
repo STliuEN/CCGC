@@ -289,6 +289,233 @@ def _legacy_dcgl_negative_row_weights(reliability_scores):
 ### ---------------------------------------
 
 
+### <--- [MODIFIED] ---------------------------------------
+def _compute_branch_reliability_score(hidden_emb, predict_labels_t, high_confidence_idx, cluster_num):
+    """
+    Unsupervised branch-quality proxy for delayed raw/AE selection.
+
+    The score uses only current pseudo labels and branch embeddings:
+    compact clusters, separated centers, and a non-collapsed cluster-size
+    distribution are treated as more reliable. No ground-truth label or
+    external metric is used.
+    """
+    if high_confidence_idx is None or high_confidence_idx.numel() == 0:
+        return None
+
+    z = F.normalize(hidden_emb[high_confidence_idx], dim=1, p=2)
+    labels = predict_labels_t[high_confidence_idx]
+    unique_labels = torch.unique(labels, sorted=True)
+    if unique_labels.numel() < 2:
+        return None
+
+    centers = []
+    sizes = []
+    compact_scores = []
+    for label in unique_labels:
+        members = torch.nonzero(labels == label, as_tuple=False).squeeze(1)
+        if members.numel() == 0:
+            continue
+        member_z = z[members]
+        center = F.normalize(torch.mean(member_z, dim=0, keepdim=True), dim=1, p=2)
+        compact = torch.mean(torch.clamp(torch.sum(member_z * center, dim=1), min=-1.0, max=1.0))
+        centers.append(center.squeeze(0))
+        sizes.append(float(members.numel()))
+        compact_scores.append(0.5 * (compact + 1.0))
+
+    if len(centers) < 2:
+        return None
+
+    centers_t = torch.stack(centers, dim=0)
+    compact_score = torch.mean(torch.stack(compact_scores))
+
+    center_sim = torch.clamp(centers_t @ centers_t.T, min=-1.0, max=1.0)
+    offdiag = center_sim[~torch.eye(center_sim.shape[0], dtype=torch.bool, device=center_sim.device)]
+    separation_score = torch.clamp(torch.mean(0.5 * (1.0 - offdiag)), min=0.0, max=1.0)
+
+    size_t = torch.tensor(sizes, dtype=hidden_emb.dtype, device=hidden_emb.device)
+    probs = size_t / torch.clamp(torch.sum(size_t), min=1.0)
+    entropy = -torch.sum(probs * torch.log(torch.clamp(probs, min=1e-8)))
+    max_entropy = torch.log(torch.tensor(float(max(2, min(cluster_num, len(sizes)))), dtype=hidden_emb.dtype, device=hidden_emb.device))
+    balance_score = torch.clamp(entropy / torch.clamp(max_entropy, min=1e-8), min=0.0, max=1.0)
+
+    coverage_score = torch.clamp(
+        torch.tensor(float(len(sizes)) / float(max(1, cluster_num)), dtype=hidden_emb.dtype, device=hidden_emb.device),
+        min=0.0,
+        max=1.0,
+    )
+    score = 0.45 * compact_score + 0.35 * separation_score + 0.15 * balance_score + 0.05 * coverage_score
+    return torch.clamp(score.detach(), min=0.0, max=1.0)
+
+
+def _edge_count(adj):
+    return int(adj.nnz // 2)
+
+
+def _edge_feature_cosine_mean(adj, features, max_edges=200000):
+    adj_upper = sp.triu(adj, k=1).tocoo()
+    if adj_upper.nnz == 0:
+        return 0.0
+
+    row = adj_upper.row
+    col = adj_upper.col
+    if adj_upper.nnz > max_edges:
+        rng = np.random.default_rng(0)
+        pick = rng.choice(adj_upper.nnz, size=max_edges, replace=False)
+        row = row[pick]
+        col = col[pick]
+
+    if isinstance(features, torch.Tensor):
+        feat_np = features.detach().cpu().numpy()
+    else:
+        feat_np = np.asarray(features)
+    feat_np = np.asarray(feat_np, dtype=np.float32)
+    norms = np.linalg.norm(feat_np, axis=1) + 1e-12
+    sims = np.sum(feat_np[row] * feat_np[col], axis=1) / (norms[row] * norms[col])
+    return float(np.mean(sims))
+
+
+def _compute_adaptive_structure_prior(adj_a, adj_ae, features, args):
+    """
+    Conservative graph-level reliability prior for adaptive branch bias.
+
+    This is intentionally a no-op for most datasets. It only raw-anchors the
+    fusion when the released/raw graph is sparse and the AE graph introduces many
+    new edges without a large feature-consistency gain. That pattern matches the
+    citation-graph failure mode where unconstrained attention over-trusts AE.
+    """
+    if getattr(args, "disable_adaptive_structure_prior", False):
+        return None
+
+    n_nodes = max(1, int(features.shape[0]))
+    raw_edges = _edge_count(adj_a)
+    ae_edges = _edge_count(adj_ae)
+    raw_degree = 2.0 * raw_edges / n_nodes
+    ae_degree = 2.0 * ae_edges / n_nodes
+    degree_ratio = ae_edges / max(1, raw_edges)
+    overlap = _edge_count(adj_a.multiply(adj_ae)) / max(1, raw_edges)
+    new_edges = adj_ae - adj_ae.multiply(adj_a)
+    new_edges.data[:] = 1
+    new_edge_ratio = _edge_count(new_edges) / max(1, ae_edges)
+    raw_feature_cos = _edge_feature_cosine_mean(adj_a, features)
+    ae_feature_cos = _edge_feature_cosine_mean(adj_ae, features)
+    feature_gain = ae_feature_cos - raw_feature_cos
+    if isinstance(features, torch.Tensor):
+        feat_np = features.detach().cpu().numpy()
+    else:
+        feat_np = np.asarray(features)
+    feat_abs = np.abs(np.asarray(feat_np, dtype=np.float32))
+    nonzero = feat_abs > 1e-12
+    feature_density = float(np.mean(nonzero))
+    nonzero_abs_mean = float(np.mean(feat_abs[nonzero])) if np.any(nonzero) else 0.0
+
+    diag = {
+        "raw_degree": raw_degree,
+        "ae_degree": ae_degree,
+        "degree_ratio": degree_ratio,
+        "overlap": overlap,
+        "new_edge_ratio": new_edge_ratio,
+        "raw_feature_cos": raw_feature_cos,
+        "ae_feature_cos": ae_feature_cos,
+        "feature_gain": feature_gain,
+        "feature_density": feature_density,
+        "nonzero_abs_mean": nonzero_abs_mean,
+    }
+
+    citation_like_sparse_features = (
+        feature_density <= float(args.adaptive_bias_feature_density_max)
+        and nonzero_abs_mean <= float(args.adaptive_bias_nonzero_abs_mean_max)
+    )
+    sparse_raw = raw_degree <= float(args.adaptive_bias_sparse_raw_degree_max)
+    ae_much_denser = degree_ratio >= float(args.adaptive_bias_ae_degree_ratio_min)
+    mostly_new = new_edge_ratio >= float(args.adaptive_bias_new_edge_ratio_min)
+    weak_feature_gain = feature_gain <= float(args.adaptive_bias_feature_gain_max)
+    raw_not_feature_only = raw_feature_cos <= float(args.adaptive_bias_raw_feature_cos_max)
+    if (
+        citation_like_sparse_features
+        and sparse_raw
+        and ae_much_denser
+        and mostly_new
+        and weak_feature_gain
+        and raw_not_feature_only
+    ):
+        return {
+            "target": "raw",
+            "cap": float(args.adaptive_bias_cap),
+            "source": "structure",
+            "diag": diag,
+        }
+
+    return {
+        "target": None,
+        "cap": 0.0,
+        "source": "none",
+        "diag": diag,
+    }
+
+
+def _resolve_adaptive_bias_start(args):
+    configured = int(args.adaptive_bias_start_epoch)
+    if configured >= 0:
+        return configured
+    return int(args.warmup_epochs)
+
+
+def _update_adaptive_branch_bias_state(state, raw_score, ae_score, epoch, args):
+    if raw_score is None or ae_score is None:
+        return None, 0.0
+
+    if epoch < _resolve_adaptive_bias_start(args):
+        return None, 0.0
+
+    margin = float((ae_score - raw_score).detach().cpu().item())
+    ema_prev = state.get("ema_margin")
+    if ema_prev is None:
+        ema_margin = margin
+    else:
+        ema_margin = float(args.adaptive_bias_ema) * float(ema_prev) + (1.0 - float(args.adaptive_bias_ema)) * margin
+    state["ema_margin"] = ema_margin
+
+    threshold = float(args.adaptive_bias_margin)
+    candidate = None
+    if ema_margin >= threshold:
+        candidate = "ae"
+    elif ema_margin <= -threshold:
+        candidate = "raw"
+
+    if candidate is None:
+        state["candidate"] = None
+        state["candidate_count"] = 0
+        if state.get("source") == "runtime":
+            state["target"] = None
+            state["activated_epoch"] = None
+        return state.get("target"), _adaptive_branch_bias_cap(state, epoch, args)
+
+    if state.get("candidate") == candidate:
+        state["candidate_count"] = int(state.get("candidate_count", 0)) + 1
+    else:
+        state["candidate"] = candidate
+        state["candidate_count"] = 1
+
+    if int(state.get("candidate_count", 0)) >= int(args.adaptive_bias_patience):
+        if state.get("target") != candidate:
+            state["target"] = candidate
+            state["activated_epoch"] = int(epoch)
+            state["source"] = "runtime"
+
+    return state.get("target"), _adaptive_branch_bias_cap(state, epoch, args)
+
+
+def _adaptive_branch_bias_cap(state, epoch, args):
+    target = state.get("target")
+    if target not in ("raw", "ae"):
+        return 0.0
+    activated_epoch = int(state.get("activated_epoch", epoch))
+    ramp_epochs = max(1, int(args.adaptive_bias_ramp_epochs))
+    ramp = min(1.0, max(0.0, float(epoch - activated_epoch + 1) / float(ramp_epochs)))
+    return ramp * float(args.adaptive_bias_cap)
+### ---------------------------------------
+
+
 def _compute_cluster_reliability(z1, z2, centers_1, centers_2, cluster_members):
     if len(cluster_members) == 0:
         return None, None, None
@@ -703,6 +930,38 @@ parser.add_argument('--branch_bias_target', type=str, default='raw', choices=['r
                     help="which branch to anchor when branch-biased fusion is enabled: 'raw' or 'ae'")
 parser.add_argument('--branch_bias_cap', type=float, default=0.2,
                     help='maximum correction weight for the non-anchored branch when branch-biased fusion is enabled')
+parser.add_argument('--enable_adaptive_branch_bias', action='store_true',
+                    help='enable delayed unsupervised raw/AE branch selection inside attention fusion')
+parser.add_argument('--disable_adaptive_structure_prior', action='store_true',
+                    help='disable conservative graph-level structure prior used by adaptive branch bias')
+parser.add_argument('--enable_runtime_adaptive_branch_bias', action='store_true',
+                    help='also enable embedding-level runtime branch selection after the structure prior')
+parser.add_argument('--adaptive_bias_start_epoch', type=int, default=-1,
+                    help='epoch to start adaptive branch selection; -1 uses warmup_epochs')
+parser.add_argument('--adaptive_bias_margin', type=float, default=0.03,
+                    help='EMA reliability margin required to choose raw or AE branch')
+parser.add_argument('--adaptive_bias_patience', type=int, default=5,
+                    help='number of consecutive checks before committing a branch target')
+parser.add_argument('--adaptive_bias_cap', type=float, default=0.35,
+                    help='maximum correction weight for the non-selected branch after adaptive selection')
+parser.add_argument('--adaptive_bias_ramp_epochs', type=int, default=20,
+                    help='epochs used to ramp the adaptive branch-bias cap after activation')
+parser.add_argument('--adaptive_bias_ema', type=float, default=0.8,
+                    help='EMA momentum for the raw-vs-AE branch reliability margin')
+parser.add_argument('--adaptive_bias_sparse_raw_degree_max', type=float, default=12.0,
+                    help='raw average degree upper bound for conservative structure-prior raw anchoring')
+parser.add_argument('--adaptive_bias_ae_degree_ratio_min', type=float, default=1.7,
+                    help='minimum AE/raw edge ratio for conservative structure-prior raw anchoring')
+parser.add_argument('--adaptive_bias_new_edge_ratio_min', type=float, default=0.75,
+                    help='minimum AE new-edge ratio for conservative structure-prior raw anchoring')
+parser.add_argument('--adaptive_bias_feature_gain_max', type=float, default=0.12,
+                    help='maximum AE-minus-raw edge feature-cosine gain for conservative raw anchoring')
+parser.add_argument('--adaptive_bias_raw_feature_cos_max', type=float, default=0.35,
+                    help='maximum raw edge feature-cosine mean for conservative raw anchoring')
+parser.add_argument('--adaptive_bias_feature_density_max', type=float, default=0.02,
+                    help='maximum feature density for conservative citation-like raw anchoring')
+parser.add_argument('--adaptive_bias_nonzero_abs_mean_max', type=float, default=1.05,
+                    help='maximum mean absolute nonzero feature value for conservative citation-like raw anchoring')
 parser.add_argument('--runs', type=int, default=10,
                     help='number of independent training runs; default keeps the paper setting')
 parser.add_argument('--seed_start', type=int, default=0,
@@ -729,6 +988,18 @@ if args.enable_improved_ccgc:
 args.fusion_min_weight = min(0.49, max(0.0, float(args.fusion_min_weight)))
 args.fixed_raw_weight = min(1.0, max(0.0, float(args.fixed_raw_weight)))
 args.branch_bias_cap = min(0.49, max(0.0, float(args.branch_bias_cap)))
+args.adaptive_bias_margin = max(0.0, float(args.adaptive_bias_margin))
+args.adaptive_bias_patience = max(1, int(args.adaptive_bias_patience))
+args.adaptive_bias_cap = min(0.49, max(0.0, float(args.adaptive_bias_cap)))
+args.adaptive_bias_ramp_epochs = max(1, int(args.adaptive_bias_ramp_epochs))
+args.adaptive_bias_ema = min(0.999, max(0.0, float(args.adaptive_bias_ema)))
+args.adaptive_bias_sparse_raw_degree_max = max(0.0, float(args.adaptive_bias_sparse_raw_degree_max))
+args.adaptive_bias_ae_degree_ratio_min = max(0.0, float(args.adaptive_bias_ae_degree_ratio_min))
+args.adaptive_bias_new_edge_ratio_min = min(1.0, max(0.0, float(args.adaptive_bias_new_edge_ratio_min)))
+args.adaptive_bias_feature_gain_max = float(args.adaptive_bias_feature_gain_max)
+args.adaptive_bias_raw_feature_cos_max = min(1.0, max(-1.0, float(args.adaptive_bias_raw_feature_cos_max)))
+args.adaptive_bias_feature_density_max = min(1.0, max(0.0, float(args.adaptive_bias_feature_density_max)))
+args.adaptive_bias_nonzero_abs_mean_max = max(0.0, float(args.adaptive_bias_nonzero_abs_mean_max))
 args.dynamic_threshold_start = min(0.999, max(1e-6, float(args.dynamic_threshold_start)))
 args.dynamic_threshold_end = min(0.999, max(1e-6, float(args.dynamic_threshold_end)))
 args.ema_proto_momentum = min(0.999, max(0.0, float(args.ema_proto_momentum)))
@@ -775,6 +1046,23 @@ if args.graph_mode == 'dual':
     smooth_fea_ae = _smooth_with_adj(adj_ae, features, args.t, args.device)
     # Fused view only for clustering initialization/evaluation.
     smooth_fea = (smooth_fea_a + smooth_fea_ae) / 2
+    adaptive_structure_prior = (
+        _compute_adaptive_structure_prior(adj_a, adj_ae, features, args)
+        if args.enable_adaptive_branch_bias else None
+    )
+    if adaptive_structure_prior is not None:
+        diag = adaptive_structure_prior.get("diag", {})
+        print(
+            "ADAPTIVE_STRUCTURE_PRIOR | "
+            f"target={adaptive_structure_prior.get('target') or 'none'} | "
+            f"source={adaptive_structure_prior.get('source', 'none')} | "
+            f"raw_degree={diag.get('raw_degree', 0.0):.4f} | "
+            f"ae_degree={diag.get('ae_degree', 0.0):.4f} | "
+            f"degree_ratio={diag.get('degree_ratio', 0.0):.4f} | "
+            f"new_edge_ratio={diag.get('new_edge_ratio', 0.0):.4f} | "
+            f"feature_gain={diag.get('feature_gain', 0.0):.4f} | "
+            f"feature_density={diag.get('feature_density', 0.0):.4f}"
+        )
     ### <--- [MODIFIED] ---------------------------------------
     gcn_adj_a = _build_gcn_adj_torch(adj_a, args.device) if args.enable_gcn_backbone else None
     gcn_adj_ae = _build_gcn_adj_torch(adj_ae, args.device) if args.enable_gcn_backbone else None
@@ -787,6 +1075,7 @@ else:
         knn_k=args.knn_k
     )
     smooth_fea = _smooth_with_adj(adj, features, args.t, args.device)
+    adaptive_structure_prior = None
     ### <--- [MODIFIED] ---------------------------------------
     gcn_adj_single = _build_gcn_adj_torch(adj, args.device) if args.enable_gcn_backbone else None
     ### ---------------------------------------
@@ -829,7 +1118,7 @@ for run_idx in range(args.runs):
             hidden_dim=args.fusion_hidden,
             temperature=args.fusion_temp,
             min_weight=args.fusion_min_weight,
-            enable_branch_bias_fusion=args.enable_branch_bias_fusion,
+            enable_branch_bias_fusion=(args.enable_branch_bias_fusion and not args.enable_adaptive_branch_bias),
             branch_bias_target=args.branch_bias_target,
             branch_bias_cap=args.branch_bias_cap,
         ).to(args.device)
@@ -851,6 +1140,13 @@ for run_idx in range(args.runs):
     ema_state_single = {} if args.enable_ema_prototypes else None
     ema_state_a = {} if args.enable_ema_prototypes else None
     ema_state_ae = {} if args.enable_ema_prototypes else None
+    adaptive_bias_state = {}
+    if args.graph_mode == 'dual' and args.enable_adaptive_branch_bias and adaptive_structure_prior is not None:
+        prior_target = adaptive_structure_prior.get("target")
+        if prior_target in ("raw", "ae"):
+            adaptive_bias_state["target"] = prior_target
+            adaptive_bias_state["activated_epoch"] = 0
+            adaptive_bias_state["source"] = adaptive_structure_prior.get("source", "structure")
     ### ---------------------------------------
 
     ### <--- [MODIFIED] ---------------------------------------
@@ -896,6 +1192,25 @@ for run_idx in range(args.runs):
             w_a = fusion_mean[0]
             w_ae = fusion_mean[1]
             high_confidence_idx = _get_high_confidence_idx(dis, hc_ratio)
+            if fusion_module is not None and args.enable_adaptive_branch_bias:
+                if adaptive_bias_state.get("target") in ("raw", "ae") and adaptive_bias_state.get("source") == "structure":
+                    fusion_module.set_adaptive_branch_bias(
+                        adaptive_bias_state.get("target"),
+                        _adaptive_branch_bias_cap(adaptive_bias_state, epoch, args)
+                    )
+                elif not args.enable_runtime_adaptive_branch_bias:
+                    fusion_module.set_adaptive_branch_bias(None, 0.0)
+                else:
+                    raw_reliability = _compute_branch_reliability_score(
+                        hidden_emb_a, predict_labels_t, high_confidence_idx, args.cluster_num
+                    )
+                    ae_reliability = _compute_branch_reliability_score(
+                        hidden_emb_ae, predict_labels_t, high_confidence_idx, args.cluster_num
+                    )
+                    adaptive_target, adaptive_cap = _update_adaptive_branch_bias_state(
+                        adaptive_bias_state, raw_reliability, ae_reliability, epoch, args
+                    )
+                    fusion_module.set_adaptive_branch_bias(adaptive_target, adaptive_cap)
 
             if epoch > args.warmup_epochs:
                 loss_a = _ccgc_confidence_loss(
@@ -1037,6 +1352,8 @@ for run_idx in range(args.runs):
                     "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
                     "graph_mode": np.asarray(args.graph_mode),
                     "fusion_mode": np.asarray(args.fusion_mode),
+                    "adaptive_bias_target": np.asarray(str(adaptive_bias_state.get("target", "none"))),
+                    "adaptive_bias_margin": np.asarray(float(adaptive_bias_state.get("ema_margin", 0.0)), dtype=np.float32),
                 }
             ### <--- [MODIFIED] ---------------------------------------
             predict_labels_t = torch.from_numpy(predict_labels).to(args.device)
@@ -1065,7 +1382,8 @@ for run_idx in range(args.runs):
                 pbar.set_postfix({
                     'Best ACC': f'{best_acc:.2f}',
                     'wA': f'{fusion_mean_eval[0].item():.2f}',
-                    'wAE': f'{fusion_mean_eval[1].item():.2f}'
+                    'wAE': f'{fusion_mean_eval[1].item():.2f}',
+                    'bias': str(adaptive_bias_state.get("target", "-")) if args.enable_adaptive_branch_bias else "-"
                 })
             else:
                 pbar.set_postfix({'Best ACC': f'{best_acc:.2f}'})
@@ -1077,7 +1395,13 @@ for run_idx in range(args.runs):
     f1_list.append(best_f1)
     
     ### <--- [MODIFIED] ---------------------------------------
-    tqdm.write(f"Run {run_idx+1:02d} Done | Seed: {seed} | ACC: {best_acc:.2f} | NMI: {best_nmi:.2f} | ARI: {best_ari:.2f} | F1: {best_f1:.2f}")
+    bias_text = ""
+    if args.graph_mode == 'dual' and args.enable_adaptive_branch_bias:
+        bias_text = (
+            f" | Bias: {adaptive_bias_state.get('target', 'none')}"
+            f" | BiasMargin: {float(adaptive_bias_state.get('ema_margin', 0.0)):.4f}"
+        )
+    tqdm.write(f"Run {run_idx+1:02d} Done | Seed: {seed} | ACC: {best_acc:.2f} | NMI: {best_nmi:.2f} | ARI: {best_ari:.2f} | F1: {best_f1:.2f}{bias_text}")
     ### ---------------------------------------
 
 acc_list = np.array(acc_list)
@@ -1152,5 +1476,7 @@ if args.save_fusion_weights_path and args.graph_mode == 'dual':
         epoch=np.asarray(best_fusion_export["epoch"], dtype=np.int64),
         graph_mode=best_fusion_export["graph_mode"],
         fusion_mode=best_fusion_export["fusion_mode"],
+        adaptive_bias_target=best_fusion_export.get("adaptive_bias_target", np.asarray("none")),
+        adaptive_bias_margin=best_fusion_export.get("adaptive_bias_margin", np.asarray(0.0, dtype=np.float32)),
     )
     print(f"Saved fusion weights: {save_path}")

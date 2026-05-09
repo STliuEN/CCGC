@@ -27,6 +27,8 @@ class DualViewAttention(nn.Module):
             raise ValueError("branch_bias_target must be either 'raw' or 'ae'.")
         self.branch_bias_target = branch_bias_target
         self.branch_bias_cap = min(0.49, max(0.0, float(branch_bias_cap)))
+        self.adaptive_bias_target = None
+        self.adaptive_bias_cap = 0.0
         ### ---------------------------------------
         # Reliability-aware attention:
         # enrich the logit input with directional discrepancy, shared content,
@@ -41,16 +43,25 @@ class DualViewAttention(nn.Module):
             nn.Linear(hidden_dim, 2),
         )
 
-    def _apply_branch_bias_fusion(self, weights):
+    def set_adaptive_branch_bias(self, target=None, cap=0.0):
+        if target not in (None, "raw", "ae"):
+            raise ValueError("adaptive branch bias target must be None, 'raw', or 'ae'.")
+        self.adaptive_bias_target = target
+        self.adaptive_bias_cap = min(0.49, max(0.0, float(cap)))
+
+    def _apply_branch_bias_fusion(self, weights, target, cap):
         # Anchor one branch and only let the other branch act as a bounded
         # correction. This keeps the output as a convex two-view fusion so the
         # rest of the training logic can stay unchanged.
-        aux_floor = min(self.min_weight, self.branch_bias_cap)
-        if self.branch_bias_target == "raw":
-            beta = aux_floor + (self.branch_bias_cap - aux_floor) * weights[:, 1:2]
+        cap = min(0.49, max(0.0, float(cap)))
+        if cap <= 0.0 or target is None:
+            return weights
+        aux_floor = min(self.min_weight, cap)
+        if target == "raw":
+            beta = aux_floor + (cap - aux_floor) * weights[:, 1:2]
             return torch.cat([1.0 - beta, beta], dim=1)
 
-        beta = aux_floor + (self.branch_bias_cap - aux_floor) * weights[:, 0:1]
+        beta = aux_floor + (cap - aux_floor) * weights[:, 0:1]
         return torch.cat([beta, 1.0 - beta], dim=1)
 
     def forward(self, hidden_a, hidden_ae):
@@ -126,8 +137,10 @@ class DualViewAttention(nn.Module):
             )
         )
         weights = F.softmax(logits / self.temperature, dim=1)
+        if self.adaptive_bias_target is not None and self.adaptive_bias_cap > 0.0:
+            return self._apply_branch_bias_fusion(weights, self.adaptive_bias_target, self.adaptive_bias_cap)
         if self.enable_branch_bias_fusion:
-            return self._apply_branch_bias_fusion(weights)
+            return self._apply_branch_bias_fusion(weights, self.branch_bias_target, self.branch_bias_cap)
         ### <--- [MODIFIED] ---------------------------------------
         if self.min_weight > 0:
             weights = self.min_weight + (1.0 - 2.0 * self.min_weight) * weights

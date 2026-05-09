@@ -64,10 +64,9 @@ CONFIG = {
     "dcgl_negative_args": {
         "dcgl_neg_tau": 0.5,
         "dcgl_neg_weight": 0.6,
-        # Reliability-gated negative separation is the default internal
-        # iteration. Dataset profiles can set
-        # `disable_dcgl_neg_reliability_gate=True` to reproduce the earlier
-        # row-weighted DCGL-negative frontier when that is empirically stronger.
+        # Keep the DCGL-negative reliability path unified across datasets.
+        # True uses the earlier row-weighted DCGL-negative frontier.
+        "disable_dcgl_neg_reliability_gate": True,
         "dcgl_neg_gate_threshold": 0.55,
         "dcgl_neg_gate_power": 2.0,
         "dcgl_neg_gate_min": 0.0,
@@ -123,7 +122,7 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.8,
+                "fusion_temp": 1.0,
                 "fusion_balance": 0.25,
                 "lambda_inst": 0.12,
                 "lambda_clu": 0.12,
@@ -186,12 +185,12 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.8,
-                "fusion_balance": 0.35,
+                "fusion_temp": 1,
+                "fusion_balance": 0.3,
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.20,
+                "fusion_min_weight": 0.10,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -244,7 +243,7 @@ CONFIG = {
                 "lambda_inst": 0.06,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.15,
+                "fusion_min_weight": 0.10,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -322,7 +321,7 @@ CONFIG = {
                 "lambda_inst": 0.0,
                 "lambda_clu": 0.035,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.05,
+                "fusion_min_weight": 0.10,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -399,21 +398,20 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 2.2,
+                "fusion_temp": 1.8,
                 "fusion_balance": 0.15,
                 "lambda_inst": 0.045,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 55,
                 "fusion_min_weight": 0.10,
 
-                "enable_branch_bias_fusion": True,
-                "branch_bias_target": "raw",
-                "branch_bias_cap": 0.15,   # cite: keep moderate AE correction
-
-                # Optional citation-safe fusion. Keep commented unless enabled.
-                # "enable_branch_bias_fusion": True,
-                # "branch_bias_target": "raw",
-                # "branch_bias_cap": 0.15,
+                "enable_adaptive_branch_bias": True,
+                "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_margin": 0.10,
+                "adaptive_bias_patience": 12,
+                "adaptive_bias_cap": 0.10,
+                "adaptive_bias_ramp_epochs": 40,
+                "adaptive_bias_ema": 0.90,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -431,7 +429,8 @@ CONFIG = {
                     "lambda_inst": [0.03, 0.045, 0.06],
                     "lambda_clu": [0.01, 0.02, 0.03],
                     "warmup_epochs": [45, 55, 65],
-                    "branch_bias_cap": [0.12, 0.15, 0.18],
+                    "adaptive_bias_margin": [0.08, 0.10, 0.12],
+                    "adaptive_bias_cap": [0.10, 0.15, 0.20],
                 },
                 "dcgl_negative_args": {
                     "dcgl_neg_tau": [0.35, 0.5, 0.75, 1.0],
@@ -459,22 +458,20 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.3,
+                "fusion_temp": 1,
                 "fusion_balance": 0.0,
                 "lambda_inst": 0.03,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 70,
-                "fusion_min_weight": 0.0,
+                "fusion_min_weight": 0.10,
 
-                "enable_branch_bias_fusion": True,
-                "branch_bias_target": "raw",
-                "branch_bias_cap": 0.10,   # cora: stronger citation-safe correction from the better run
-
-
-                # Optional citation-safe fusion. Keep commented unless enabled.
-                # "enable_branch_bias_fusion": True,
-                # "branch_bias_target": "raw",
-                # "branch_bias_cap": 0.10,
+                "enable_adaptive_branch_bias": True,
+                "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_margin": 0.10,
+                "adaptive_bias_patience": 12,
+                "adaptive_bias_cap": 0.10,
+                "adaptive_bias_ramp_epochs": 40,
+                "adaptive_bias_ema": 0.90,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -490,7 +487,8 @@ CONFIG = {
                     "lambda_inst": [0.02, 0.03, 0.04],
                     "lambda_clu": [0.005, 0.01, 0.02],
                     "warmup_epochs": [55, 70, 85],
-                    "branch_bias_cap": [0.08, 0.10, 0.12],
+                    "adaptive_bias_margin": [0.08, 0.10, 0.12],
+                    "adaptive_bias_cap": [0.08, 0.10, 0.12],
                 },
                 "dcgl_negative_args": {
                     "dcgl_neg_tau": [0.35, 0.5, 0.75],
@@ -555,7 +553,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.05,
                 "warmup_epochs": 32,
-                "fusion_min_weight": 0.005,
+                "fusion_min_weight": 0.10,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -636,7 +634,7 @@ CONFIG = {
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.20,
+                "fusion_min_weight": 0.10,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -704,6 +702,13 @@ CONFIG = {
         "lambda_clu": 0.09,
         "warmup_epochs": 35,
         "fusion_min_weight": 0.10,
+        "enable_adaptive_branch_bias": True,
+        "adaptive_bias_start_epoch": -1,
+        "adaptive_bias_margin": 0.10,
+        "adaptive_bias_patience": 12,
+        "adaptive_bias_cap": 0.10,
+        "adaptive_bias_ramp_epochs": 40,
+        "adaptive_bias_ema": 0.90,
         # Example:
         # "fusion_hidden": 128,
         # "fusion_temp": 1.0,
@@ -713,6 +718,11 @@ CONFIG = {
         # "enable_branch_bias_fusion": True,
         # "branch_bias_target": "raw",  # or "ae"
         # "branch_bias_cap": 0.15,
+        # Optional adaptive branch selection. It never receives a raw/AE target;
+        # train.py first applies a conservative unsupervised structure prior,
+        # then falls back to ordinary attention when the evidence is weak.
+        # "enable_adaptive_branch_bias": True,
+        # "adaptive_bias_cap": 0.35,
 
         #"fusion_hidden": 32,
         #"fusion_temp": 1.8,
@@ -1099,6 +1109,9 @@ def main():
     if improved_module_args:
         arg_text = " ".join([f"--{k}={v}" for k, v in improved_module_args.items()])
         summary_lines.append(f"Improved Module Args: {arg_text}")
+    if CONFIG.get("run_dual_attn", False):
+        attn_arg_text = " ".join([f"--{k}={v}" for k, v in CONFIG.get("dual_attn_args", {}).items()])
+        summary_lines.append(f"Default Dual Attn Args: {attn_arg_text}")
     ### ---------------------------------------
     summary_lines.append("")
 
@@ -1151,6 +1164,9 @@ def main():
         summary_lines.append(f"[Dataset] {dataset} (cluster_num={cluster_num})")
         ### <--- [MODIFIED] ---------------------------------------
         summary_lines.append(f"  AE Base Graph Source: {ae_base_graph_source}")
+        if run_dual_attn:
+            dataset_attn_text = " ".join([f"--{k}={v}" for k, v in merged_dual_attn_args.items()])
+            summary_lines.append(f"  Dual Attn Args: {dataset_attn_text}")
         ### ---------------------------------------
 
         missing, _ = _check_dataset_files(
