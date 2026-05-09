@@ -17,6 +17,11 @@ from sklearn.preprocessing import StandardScaler
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.render_dsafc_paper_figures import CLUSTER_COLORS, style_framed_axes
+
 PYTHON = Path(r"C:\Users\stern\anaconda3\envs\SCGC_1\python.exe")
 EMBED_DIR = ROOT / "assets" / "tsne_embeddings"
 OUT_DIR = ROOT / "assets"
@@ -338,8 +343,17 @@ def reduce_for_plot(embedding: np.ndarray, labels: np.ndarray, sample_idx: np.nd
 def draw(args: argparse.Namespace) -> None:
     rows = len(DATASETS)
     cols = len(METHODS)
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Serif",
+            "mathtext.fontset": "dejavuserif",
+            "figure.facecolor": "white",
+            "savefig.facecolor": "white",
+            "axes.unicode_minus": False,
+        }
+    )
     fig, axes = plt.subplots(rows, cols, figsize=(19.5, 5.8), constrained_layout=False)
-    palette = ["#377eb8", "#ff7f00", "#4daf4a", "#e41a1c", "#984ea3", "#a65628", "#ffff33", "#f781bf"]
+    palette = list(CLUSTER_COLORS)
 
     metadata = {}
     for row, dataset in enumerate(DATASETS):
@@ -368,8 +382,7 @@ def draw(args: argparse.Namespace) -> None:
                 )
             ax.set_xticks([])
             ax.set_yticks([])
-            for spine in ax.spines.values():
-                spine.set_visible(False)
+            style_framed_axes(ax, grid_axis=None)
             table_acc = MAIN_TABLE_ACC[dataset][title]
             metadata[f"{dataset}/{key}"] = {
                 "file": str(path.relative_to(ROOT)),

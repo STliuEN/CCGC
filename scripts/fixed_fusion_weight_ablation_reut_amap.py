@@ -221,6 +221,32 @@ def parse_final_metrics(stdout: str) -> dict[str, dict[str, float]]:
     return metrics
 
 
+RESOURCE_LABEL_TO_KEY = {
+    "Wall time (sec)": "wall_time_sec",
+    "CPU util (%)": "cpu_percent",
+    "Process CPU (%)": "process_cpu_percent",
+    "RAM used (GB)": "ram_used_gb",
+    "RAM total (GB)": "ram_total_gb",
+    "RAM util (%)": "ram_percent",
+    "Process RSS (GB)": "process_rss_gb",
+    "GPU util (%)": "gpu_util_percent",
+    "GPU memory used (GB)": "gpu_memory_used_gb",
+    "GPU memory total (GB)": "gpu_memory_total_gb",
+    "Torch max allocated (GB)": "torch_gpu_allocated_gb",
+    "Torch max reserved (GB)": "torch_gpu_reserved_gb",
+}
+
+
+def parse_resource_summary(stdout: str) -> dict[str, float]:
+    resource: dict[str, float] = {}
+    pattern = re.compile(r"^RESOURCE\s+\|\s+(.+?)\s+\|\s+([+-]?\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+    for match in pattern.finditer(stdout or ""):
+        key = RESOURCE_LABEL_TO_KEY.get(match.group(1).strip())
+        if key:
+            resource[key] = float(match.group(2))
+    return resource
+
+
 def score_metrics(metrics: dict[str, dict[str, float]]) -> float:
     if not all(metric in metrics for metric in METRICS):
         return float("-inf")
@@ -283,6 +309,13 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def format_resource_cell(resource: dict[str, Any], key: str, digits: int = 2) -> str:
+    value = resource.get(key)
+    if value is None:
+        return "--"
+    return f"{float(value):.{digits}f}"
+
+
 def write_summary(run_dir: Path, rows: list[dict[str, Any]], *, datasets: tuple[str, ...], weights: tuple[float, ...], args: argparse.Namespace) -> None:
     lines = [
         "# Fixed Fusion Weight Ablation",
@@ -324,6 +357,28 @@ def write_summary(run_dir: Path, rows: list[dict[str, Any]], *, datasets: tuple[
                 f"{row['score']:.2f} | {used_raw_text} |"
             )
         lines.append("")
+        resource_rows = [row for row in dataset_rows if row.get("resource")]
+        if resource_rows:
+            lines.append("### Training Resource Monitor")
+            lines.append("")
+            lines.append("| Setting | Raw weight | DCGL-negative | Wall time (s) | CPU (%) | Proc CPU (%) | RAM used (GB) | Proc RSS (GB) | GPU (%) | GPU mem (GB) | Torch peak (GB) |")
+            lines.append("| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            for row in resource_rows:
+                resource = row.get("resource", {})
+                fixed_weight = row.get("fixed_raw_weight")
+                fixed_text = "--" if fixed_weight is None else f"{float(fixed_weight):.2f}"
+                lines.append(
+                    f"| {row['label']} | {fixed_text} | {row['enable_dcgl']} | "
+                    f"{format_resource_cell(resource, 'wall_time_sec', 2)} | "
+                    f"{format_resource_cell(resource, 'cpu_percent', 1)} | "
+                    f"{format_resource_cell(resource, 'process_cpu_percent', 1)} | "
+                    f"{format_resource_cell(resource, 'ram_used_gb', 3)} | "
+                    f"{format_resource_cell(resource, 'process_rss_gb', 3)} | "
+                    f"{format_resource_cell(resource, 'gpu_util_percent', 1)} | "
+                    f"{format_resource_cell(resource, 'gpu_memory_used_gb', 3)} | "
+                    f"{format_resource_cell(resource, 'torch_gpu_allocated_gb', 3)} |"
+                )
+            lines.append("")
     (run_dir / "summary.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
@@ -335,8 +390,24 @@ def maybe_plot(run_dir: Path, rows: list[dict[str, Any]], datasets: tuple[str, .
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from scripts.render_dsafc_paper_figures import (
+            DCGL_COLOR,
+            FIXED_COLOR,
+            style_legend,
+            style_framed_axes,
+        )
     except Exception:
         return
+
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Serif",
+            "mathtext.fontset": "dejavuserif",
+            "figure.facecolor": "white",
+            "savefig.facecolor": "white",
+            "axes.unicode_minus": False,
+        }
+    )
 
     ok_rows = [row for row in rows if row["status"] == "ok"]
     for metric in ("ACC", "score"):
@@ -360,7 +431,7 @@ def maybe_plot(run_dir: Path, rows: list[dict[str, Any]], datasets: tuple[str, .
         legend_handles: list[Any] = []
         legend_labels: list[str] = []
         for ax, dataset in zip(axes_arr, datasets):
-            for enable_dcgl, color in ((False, "#4c78a8"), (True, "#f58518")):
+            for enable_dcgl, color in ((False, FIXED_COLOR), (True, DCGL_COLOR)):
                 fixed = [
                     row for row in ok_rows
                     if row["dataset"] == dataset and row["setting"] == "fixed" and row["enable_dcgl"] == enable_dcgl
@@ -398,24 +469,25 @@ def maybe_plot(run_dir: Path, rows: list[dict[str, Any]], datasets: tuple[str, .
                     if label not in legend_labels:
                         legend_handles.append(scatter)
                         legend_labels.append(label)
-            ax.set_title(DATASET_LABELS.get(dataset, dataset))
-            ax.set_xlabel("Raw-graph weight")
-            ax.set_ylabel("Score" if metric == "score" else metric)
-            ax.grid(True, alpha=0.25)
+            ax.set_title(DATASET_LABELS.get(dataset, dataset), fontweight="bold")
+            ax.set_xlabel("Raw-graph weight", fontweight="bold")
+            ax.set_ylabel("Score" if metric == "score" else metric, fontweight="bold")
+            style_framed_axes(ax, grid_axis="y")
             ax.set_xlim(-0.03, 1.03)
             if y_limits is not None:
                 ax.set_ylim(*y_limits)
         for ax in axes_arr[len(datasets):]:
             ax.axis("off")
         if legend_handles:
-            fig.legend(
+            legend = fig.legend(
                 legend_handles,
                 legend_labels,
                 loc="upper center",
                 ncol=min(4, len(legend_handles)),
-                frameon=False,
+                frameon=True,
                 bbox_to_anchor=(0.5, 1.02),
             )
+            style_legend(legend)
         fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
         fig.savefig(run_dir / f"{metric.lower()}_fixed_weight_curve.png", dpi=220)
         plt.close(fig)
@@ -561,6 +633,7 @@ def main() -> int:
                     encoding="utf-8",
                 )
                 metrics = parse_final_metrics(stdout)
+                resource = parse_resource_summary(stdout)
                 row = {
                     "dataset": dataset,
                     "key": key,
@@ -569,6 +642,7 @@ def main() -> int:
                     "fixed_raw_weight": float(raw_weight),
                     "enable_dcgl": bool(enable_dcgl),
                     "metrics": metrics,
+                    "resource": resource,
                     "score": score_metrics(metrics),
                     "fusion_diag": fusion_diag(fusion_npz, fallback_raw_weight=raw_weight),
                     "returncode": rc,
@@ -608,6 +682,7 @@ def main() -> int:
                 encoding="utf-8",
             )
             metrics = parse_final_metrics(stdout)
+            resource = parse_resource_summary(stdout)
             label = "DSAFC dynamic" if enable_dcgl else "A-DSF dynamic"
             row = {
                 "dataset": dataset,
@@ -617,6 +692,7 @@ def main() -> int:
                 "fixed_raw_weight": None,
                 "enable_dcgl": bool(enable_dcgl),
                 "metrics": metrics,
+                "resource": resource,
                 "score": score_metrics(metrics),
                 "fusion_diag": fusion_diag(fusion_npz),
                 "returncode": rc,

@@ -1,5 +1,7 @@
 import argparse
 from pathlib import Path
+import subprocess
+import time
 import torch
 from utils import *
 from tqdm import tqdm
@@ -11,6 +13,113 @@ from attention_fusion import DualViewAttention, fuse_dual_views
 
 ### <--- [MODIFIED] ---------------------------------------
 _DYNAMIC_HC_STATE = {}
+
+
+def _try_process_monitor():
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process()
+        psutil.cpu_percent(None)
+        proc.cpu_percent(None)
+        return psutil, proc
+    except Exception:
+        return None, None
+
+
+def _system_snapshot(psutil_mod=None, proc=None) -> dict[str, float | str]:
+    snapshot: dict[str, float | str] = {}
+    if psutil_mod is not None:
+        try:
+            vm = psutil_mod.virtual_memory()
+            snapshot["ram_used_gb"] = float(vm.used) / (1024 ** 3)
+            snapshot["ram_total_gb"] = float(vm.total) / (1024 ** 3)
+            snapshot["ram_percent"] = float(vm.percent)
+        except Exception:
+            pass
+        try:
+            snapshot["cpu_percent"] = float(psutil_mod.cpu_percent(interval=None))
+        except Exception:
+            pass
+    if proc is not None:
+        try:
+            mem = proc.memory_info()
+            snapshot["process_rss_gb"] = float(mem.rss) / (1024 ** 3)
+            snapshot["process_cpu_percent"] = float(proc.cpu_percent(None))
+        except Exception:
+            pass
+    return snapshot
+
+
+def _gpu_snapshot(device: str) -> dict[str, float | str]:
+    snapshot: dict[str, float | str] = {}
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        try:
+            idx = torch.cuda.current_device()
+            snapshot["torch_gpu_allocated_gb"] = float(torch.cuda.max_memory_allocated(idx)) / (1024 ** 3)
+            snapshot["torch_gpu_reserved_gb"] = float(torch.cuda.max_memory_reserved(idx)) / (1024 ** 3)
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used,memory.total,utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            first = out.strip().splitlines()[0].split(",")
+            if len(first) >= 3:
+                snapshot["gpu_memory_used_gb"] = float(first[0].strip()) / 1024.0
+                snapshot["gpu_memory_total_gb"] = float(first[1].strip()) / 1024.0
+                snapshot["gpu_util_percent"] = float(first[2].strip())
+        except Exception:
+            pass
+    return snapshot
+
+
+def _resource_summary(start_time: float, psutil_mod=None, proc=None, device: str = "cpu") -> dict[str, float | str]:
+    summary: dict[str, float | str] = {"wall_time_sec": float(time.perf_counter() - start_time)}
+    summary.update(_system_snapshot(psutil_mod, proc))
+    summary.update(_gpu_snapshot(device))
+    return summary
+
+
+def _fmt_resource_value(value: float | str, unit: str = "") -> str:
+    if isinstance(value, str):
+        return value
+    if unit == "sec":
+        return f"{value:.2f}"
+    if unit == "gb":
+        return f"{value:.3f}"
+    if unit == "pct":
+        return f"{value:.1f}"
+    return f"{value:.4f}"
+
+
+def _print_resource_summary(summary: dict[str, float | str]) -> None:
+    fields = [
+        ("Wall time (sec)", "wall_time_sec", "sec"),
+        ("CPU util (%)", "cpu_percent", "pct"),
+        ("Process CPU (%)", "process_cpu_percent", "pct"),
+        ("RAM used (GB)", "ram_used_gb", "gb"),
+        ("RAM total (GB)", "ram_total_gb", "gb"),
+        ("RAM util (%)", "ram_percent", "pct"),
+        ("Process RSS (GB)", "process_rss_gb", "gb"),
+        ("GPU util (%)", "gpu_util_percent", "pct"),
+        ("GPU memory used (GB)", "gpu_memory_used_gb", "gb"),
+        ("GPU memory total (GB)", "gpu_memory_total_gb", "gb"),
+        ("Torch max allocated (GB)", "torch_gpu_allocated_gb", "gb"),
+        ("Torch max reserved (GB)", "torch_gpu_reserved_gb", "gb"),
+    ]
+    print(f"\n{'='*20} RESOURCE SUMMARY {'='*20}")
+    for label, key, unit in fields:
+        if key in summary:
+            print(f"RESOURCE | {label:<24} | {_fmt_resource_value(summary[key], unit)}")
+    print(f"{'='*58}\n")
 
 
 def _reset_dynamic_hc_state():
@@ -632,6 +741,14 @@ args.gcn_dropout = min(0.99, max(0.0, float(args.gcn_dropout)))
 ### ---------------------------------------
 ### ---------------------------------------
 
+_resource_start_time = time.perf_counter()
+_psutil_mod, _process_monitor = _try_process_monitor()
+if str(args.device).startswith("cuda") and torch.cuda.is_available():
+    try:
+        torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        pass
+
 #load data
 ### <--- [MODIFIED] ---------------------------------------
 if args.graph_mode == 'dual':
@@ -982,6 +1099,9 @@ print(f"ARI     |   {ari_list.mean():.2f}    ±   {ari_list.std():.2f}")
 print(f"F1      |   {f1_list.mean():.2f}    ±   {f1_list.std():.2f}")
 print(f"{'='*55}\n")
 ### ---------------------------------------
+
+_resource_stats = _resource_summary(_resource_start_time, _psutil_mod, _process_monitor, args.device)
+_print_resource_summary(_resource_stats)
 
 if args.save_embedding_path:
     if best_export is None:

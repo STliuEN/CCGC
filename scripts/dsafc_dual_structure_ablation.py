@@ -322,6 +322,32 @@ def parse_final_metrics(stdout: str) -> dict[str, dict[str, float]]:
     return metrics
 
 
+RESOURCE_LABEL_TO_KEY = {
+    "Wall time (sec)": "wall_time_sec",
+    "CPU util (%)": "cpu_percent",
+    "Process CPU (%)": "process_cpu_percent",
+    "RAM used (GB)": "ram_used_gb",
+    "RAM total (GB)": "ram_total_gb",
+    "RAM util (%)": "ram_percent",
+    "Process RSS (GB)": "process_rss_gb",
+    "GPU util (%)": "gpu_util_percent",
+    "GPU memory used (GB)": "gpu_memory_used_gb",
+    "GPU memory total (GB)": "gpu_memory_total_gb",
+    "Torch max allocated (GB)": "torch_gpu_allocated_gb",
+    "Torch max reserved (GB)": "torch_gpu_reserved_gb",
+}
+
+
+def parse_resource_summary(stdout: str) -> dict[str, float]:
+    resource: dict[str, float] = {}
+    pattern = re.compile(r"^RESOURCE\s+\|\s+(.+?)\s+\|\s+([+-]?\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+    for match in pattern.finditer(stdout or ""):
+        key = RESOURCE_LABEL_TO_KEY.get(match.group(1).strip())
+        if key:
+            resource[key] = float(match.group(2))
+    return resource
+
+
 def score_metrics(metrics: dict[str, dict[str, float]]) -> float:
     if not all(metric in metrics for metric in METRICS):
         return float("-inf")
@@ -559,6 +585,13 @@ def format_metric_cell(value: dict[str, float] | None) -> str:
     return f"{value['mean']:.2f}+-{value['std']:.2f}"
 
 
+def format_resource_cell(resource: dict[str, Any], key: str, digits: int = 2) -> str:
+    value = resource.get(key)
+    if value is None:
+        return "--"
+    return f"{float(value):.{digits}f}"
+
+
 def write_summary(
     out_dir: Path,
     dataset_rows: list[dict[str, Any]],
@@ -630,6 +663,30 @@ def write_summary(
                     f"{diag_row['dominant_raw_ratio']:.4f} | "
                     f"{diag_row.get('dominant_balanced_ratio', 0.0):.4f} | "
                     f"{diag_row['dominant_ae_ratio']:.4f} |"
+                )
+            lines.append("")
+
+        resource_rows = [
+            (variant.label, row["variants"][variant.key].get("resource", {}))
+            for variant in variants
+            if variant.key in row["variants"] and row["variants"][variant.key].get("resource")
+        ]
+        if resource_rows:
+            lines.append("### Training Resource Monitor")
+            lines.append("")
+            lines.append("| Variant | Wall time (s) | CPU (%) | Proc CPU (%) | RAM used (GB) | Proc RSS (GB) | GPU (%) | GPU mem (GB) | Torch peak (GB) |")
+            lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            for label, resource in resource_rows:
+                lines.append(
+                    f"| {label} | "
+                    f"{format_resource_cell(resource, 'wall_time_sec', 2)} | "
+                    f"{format_resource_cell(resource, 'cpu_percent', 1)} | "
+                    f"{format_resource_cell(resource, 'process_cpu_percent', 1)} | "
+                    f"{format_resource_cell(resource, 'ram_used_gb', 3)} | "
+                    f"{format_resource_cell(resource, 'process_rss_gb', 3)} | "
+                    f"{format_resource_cell(resource, 'gpu_util_percent', 1)} | "
+                    f"{format_resource_cell(resource, 'gpu_memory_used_gb', 3)} | "
+                    f"{format_resource_cell(resource, 'torch_gpu_allocated_gb', 3)} |"
                 )
             lines.append("")
 
@@ -720,6 +777,7 @@ def main() -> int:
             )
 
             metrics = parse_final_metrics(stdout)
+            resource = parse_resource_summary(stdout)
             row = {
                 "dataset": dataset,
                 "variant": variant.key,
@@ -729,6 +787,7 @@ def main() -> int:
                 "log_path": str(log_path),
                 "returncode": rc,
                 "metrics": metrics,
+                "resource": resource,
                 "score": score_metrics(metrics),
                 "status": "ok" if rc == 0 and metrics else "failed",
             }

@@ -170,6 +170,7 @@ CONFIG = {
                 ### <--- [MODIFIED] ---------------------------------------
                 # Main-table USPS center keeps the standard 1e-4 train step.
                 "lr": 1e-4,
+                "t": 6,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -241,7 +242,7 @@ CONFIG = {
                 "fusion_temp": 1.6,
                 "fusion_balance": 0.25,
                 "lambda_inst": 0.06,
-                "lambda_clu": 0.06,
+                "lambda_clu": 0.02,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.15,
             },
@@ -316,7 +317,7 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.25,
+                "fusion_temp": 1.0,
                 "fusion_balance": 0.08,
                 "lambda_inst": 0.0,
                 "lambda_clu": 0.035,
@@ -398,7 +399,7 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.8,
+                "fusion_temp": 2.2,
                 "fusion_balance": 0.15,
                 "lambda_inst": 0.045,
                 "lambda_clu": 0.02,
@@ -461,7 +462,7 @@ CONFIG = {
                 "fusion_temp": 1.3,
                 "fusion_balance": 0.0,
                 "lambda_inst": 0.03,
-                "lambda_clu": 0.01,
+                "lambda_clu": 0.02,
                 "warmup_epochs": 70,
                 "fusion_min_weight": 0.0,
 
@@ -612,7 +613,7 @@ CONFIG = {
                 ### <--- [MODIFIED] ---------------------------------------
                 # Final selected stable combo uses a slightly longer horizon,
                 # higher propagation depth, and a mild alpha reduction.
-                "t": 5,
+                "t": 6,
                 "epochs": 500,
                 "lr": 1.2e-4,
                 "alpha": 0.45,
@@ -630,7 +631,7 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.8,
+                "fusion_temp": 1.0,
                 "fusion_balance": 0.35,
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
@@ -820,6 +821,55 @@ def _extract_metrics(text):
     return metrics
 
 
+RESOURCE_LABEL_TO_KEY = {
+    "Wall time (sec)": "wall_time_sec",
+    "CPU util (%)": "cpu_percent",
+    "Process CPU (%)": "process_cpu_percent",
+    "RAM used (GB)": "ram_used_gb",
+    "RAM total (GB)": "ram_total_gb",
+    "RAM util (%)": "ram_percent",
+    "Process RSS (GB)": "process_rss_gb",
+    "GPU util (%)": "gpu_util_percent",
+    "GPU memory used (GB)": "gpu_memory_used_gb",
+    "GPU memory total (GB)": "gpu_memory_total_gb",
+    "Torch max allocated (GB)": "torch_gpu_allocated_gb",
+    "Torch max reserved (GB)": "torch_gpu_reserved_gb",
+}
+
+
+def _extract_resource_summary(text):
+    resource = {}
+    pattern = re.compile(r"^RESOURCE\s+\|\s+(.+?)\s+\|\s+([+-]?\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+    for match in pattern.finditer(text or ""):
+        key = RESOURCE_LABEL_TO_KEY.get(match.group(1).strip())
+        if key:
+            resource[key] = float(match.group(2))
+    return resource
+
+
+def _resource_value(resource, key, fmt):
+    value = resource.get(key)
+    return "--" if value is None else format(float(value), fmt)
+
+
+def _append_resource(summary_lines, resource):
+    if not resource:
+        return
+    summary_lines.append(
+        "    Resource: "
+        f"wall={_resource_value(resource, 'wall_time_sec', '.2f')}s, "
+        f"cpu={_resource_value(resource, 'cpu_percent', '.1f')}%, "
+        f"proc_cpu={_resource_value(resource, 'process_cpu_percent', '.1f')}%, "
+        f"ram={_resource_value(resource, 'ram_used_gb', '.3f')}GB/"
+        f"{_resource_value(resource, 'ram_total_gb', '.3f')}GB, "
+        f"proc_rss={_resource_value(resource, 'process_rss_gb', '.3f')}GB, "
+        f"gpu={_resource_value(resource, 'gpu_util_percent', '.1f')}%, "
+        f"gpu_mem={_resource_value(resource, 'gpu_memory_used_gb', '.3f')}GB/"
+        f"{_resource_value(resource, 'gpu_memory_total_gb', '.3f')}GB, "
+        f"torch_peak={_resource_value(resource, 'torch_gpu_allocated_gb', '.3f')}GB"
+    )
+
+
 ### <--- [MODIFIED] ---------------------------------------
 def _append_metrics(summary_lines, metrics):
     if not metrics:
@@ -958,6 +1008,7 @@ def _run_and_log(
         "stderr": proc.stderr,
         "log_path": log_path,
         "metrics": _extract_metrics(proc.stdout),
+        "resource": _extract_resource_summary(proc.stdout),
     }
 
 
@@ -1148,6 +1199,7 @@ def main():
                 f"log={_log_ref(baseline_result['log_path'], output_dir)}"
             )
             _append_metrics(summary_lines, baseline_result["metrics"])
+            _append_resource(summary_lines, baseline_result.get("resource", {}))
 
         # Improved: generate Ae graph offline once, then train with graph_mode=ae and/or dual
         if CONFIG["run_ae"] or run_dual_mean or run_dual_attn:
@@ -1257,6 +1309,7 @@ def main():
                     f"log={_log_ref(ae_result['log_path'], output_dir)}"
                 )
                 _append_metrics(summary_lines, ae_result["metrics"])
+                _append_resource(summary_lines, ae_result.get("resource", {}))
 
             if run_dual_mean:
                 dual_mean_cmd = [
@@ -1287,6 +1340,7 @@ def main():
                     f"log={_log_ref(dual_mean_result['log_path'], output_dir)}"
                 )
                 _append_metrics(summary_lines, dual_mean_result["metrics"])
+                _append_resource(summary_lines, dual_mean_result.get("resource", {}))
 
             if run_dual_attn:
                 dual_attn_cmd = [
@@ -1317,6 +1371,7 @@ def main():
                     f"log={_log_ref(dual_attn_result['log_path'], output_dir)}"
                 )
                 _append_metrics(summary_lines, dual_attn_result["metrics"])
+                _append_resource(summary_lines, dual_attn_result.get("resource", {}))
 
         # Delta summary for quick reproduction comparison
         if baseline_result and baseline_result["metrics"]:

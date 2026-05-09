@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 import re
 import textwrap
@@ -9,6 +10,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 
 
@@ -19,13 +22,70 @@ TABLE_ROW_SCALE = 1.12
 GROUP_GAP_RATIO = 0.42
 GROUP_LABEL_Y_OFFSET = -0.025
 COMPETITIVE_RIGHT_BLOCK = ("DFCN", "CCGC", "SCGC-S", "GLAC-GCN", "SCGC-N", "SCGC-N*", "Ours")
-OURS_COLUMN_FILL = "#eeeeee"
+MAIN_RED = "#d7191c"
+RAW_BLUE = "#3f6fbd"
+AE_ORANGE = "#df7d42"
+FUSION_GREEN = "#73a96d"
+CLUSTER_YELLOW = "#e6b94b"
+SHARED_RED = "#d88f89"
+NEUTRAL_LINE = "#8a8a8a"
+SOFT_BLUE = "#e7eff9"
+SOFT_ORANGE = "#fbefe7"
+SOFT_GREEN = "#e6f2e8"
+SOFT_YELLOW = "#fff5d8"
+SOFT_GREY = "#f3f5f7"
+OURS_COLUMN_FILL = SOFT_GREEN
 LOCAL_REPRO_SOURCE_SECTION = "Table 4-2 Main Std Availability"
 LOCAL_REPRO_SOURCE_TOKEN = "other_projects"
 LOCAL_REPRO_EXCLUDE_METHODS = {"Ours"}
+HYPERPARAM_SENSITIVITY_RUN = (
+    ROOT
+    / "experiment_output"
+    / "hyperparameter_sensitivity_ofat"
+    / "20260508_130549_reut_uat_amap_usps_cora_cite_t_kE_fusion_temp_lambda_clu"
+)
 PRIMARY_BAR = "#505050"
 SECONDARY_BAR = "#8d8d8d"
 TERTIARY_BAR = "#d8d8d8"
+FRAME_COLOR = "#000000"
+GRID_COLOR = "#c7d5e9"
+AXIS_COLOR = "#000000"
+TEXT_COLOR = "#111111"
+PLOT_COLORS = (
+    RAW_BLUE,
+    AE_ORANGE,
+    FUSION_GREEN,
+    CLUSTER_YELLOW,
+    MAIN_RED,
+    "#6ea8c7",
+    "#7f8790",
+    "#8a78a8",
+)
+FIXED_COLOR = PLOT_COLORS[0]
+DCGL_COLOR = PLOT_COLORS[1]
+ABLATION_COLORS = (
+    RAW_BLUE,
+    AE_ORANGE,
+    "#95a9b8",
+    CLUSTER_YELLOW,
+    FUSION_GREEN,
+)
+CLUSTER_COLORS = (
+    RAW_BLUE,
+    AE_ORANGE,
+    FUSION_GREEN,
+    CLUSTER_YELLOW,
+    MAIN_RED,
+    "#66a9c9",
+    "#7f8790",
+    "#8a78a8",
+    "#b98b5f",
+    "#6f9c8b",
+)
+RANK_HEATMAP_CMAP = LinearSegmentedColormap.from_list(
+    "dsafc_rank",
+    [SOFT_GREEN, SOFT_BLUE, SOFT_YELLOW, SOFT_ORANGE],
+)
 
 plt.rcParams.update(
     {
@@ -33,9 +93,39 @@ plt.rcParams.update(
         "mathtext.fontset": "dejavuserif",
         "figure.facecolor": "white",
         "savefig.facecolor": "white",
+        "axes.facecolor": "white",
+        "axes.edgecolor": AXIS_COLOR,
+        "axes.labelcolor": TEXT_COLOR,
+        "xtick.color": TEXT_COLOR,
+        "ytick.color": TEXT_COLOR,
+        "text.color": TEXT_COLOR,
         "axes.unicode_minus": False,
+        "legend.frameon": False,
     }
 )
+
+
+def style_framed_axes(ax: plt.Axes, *, grid_axis: str | None = "y") -> None:
+    if grid_axis:
+        ax.grid(axis=grid_axis, color=GRID_COLOR, linestyle="--", linewidth=0.55, alpha=0.72)
+        ax.set_axisbelow(True)
+    for spine in ("top", "right", "bottom", "left"):
+        ax.spines[spine].set_visible(True)
+        ax.spines[spine].set_color(AXIS_COLOR)
+        ax.spines[spine].set_linewidth(0.62)
+    ax.tick_params(axis="both", colors=TEXT_COLOR, width=0.62)
+
+
+def style_legend(legend, *, linewidth: float = 0.75) -> None:
+    if legend is None:
+        return
+    frame = legend.get_frame()
+    frame.set_facecolor("white")
+    frame.set_edgecolor("#b5b5b5")
+    frame.set_linewidth(linewidth)
+    frame.set_alpha(1.0)
+    for text in legend.get_texts():
+        text.set_color(TEXT_COLOR)
 
 
 def _parse_float(value: str) -> float | None:
@@ -450,25 +540,20 @@ def render_average_rank_chart(path: Path, columns: list[str], rows: list[list[st
     colors = []
     for method in methods:
         if method == "Ours":
-            colors.append(PRIMARY_BAR)
+            colors.append(PLOT_COLORS[0])
         elif method in {"CCGC", "SCGC-S", "GLAC-GCN", "SCGC-N"}:
-            colors.append(SECONDARY_BAR)
+            colors.append(PLOT_COLORS[3])
         else:
-            colors.append(TERTIARY_BAR)
+            colors.append("#b9c1c8")
 
     fig, ax = plt.subplots(figsize=(9.6, 6.6))
     y = np.arange(len(methods))
-    bars = ax.barh(y, scores, color=colors, edgecolor="none", height=0.72)
+    bars = ax.barh(y, scores, color=colors, edgecolor=AXIS_COLOR, linewidth=0.35, height=0.72)
     ax.invert_yaxis()
     ax.set_yticks(y, labels=methods)
-    ax.set_xlabel("Average rank (lower is better)", fontsize=_font(15.0))
-    ax.set_title("Overall Average Rank Across 28 Tasks", fontsize=_font(17.0), pad=10)
-    ax.grid(axis="x", color="#d9d9d9", linewidth=0.8, alpha=0.8)
-    ax.set_axisbelow(True)
-    for spine in ("top", "right", "left"):
-        ax.spines[spine].set_visible(False)
-    for spine in ("bottom",):
-        ax.spines[spine].set_color("#8a8a8a")
+    ax.set_xlabel("Average rank (lower is better)", fontsize=_font(15.0), fontweight="bold")
+    ax.set_title("Overall Average Rank Across 28 Tasks", fontsize=_font(17.0), fontweight="bold", pad=10)
+    style_framed_axes(ax, grid_axis="x")
     for tick, method in zip(ax.get_yticklabels(), methods):
         if method == "Ours":
             tick.set_fontweight("bold")
@@ -494,10 +579,11 @@ def render_dataset_rank_heatmap(path: Path, columns: list[str], rows: list[list[
     matrix = np.array([[dataset_avg[dataset][method] for method in methods] for dataset in datasets], dtype=float)
 
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
-    im = ax.imshow(matrix, cmap="Greys", aspect="auto", vmin=np.min(matrix), vmax=np.max(matrix))
+    im = ax.imshow(matrix, cmap=RANK_HEATMAP_CMAP, aspect="auto", vmin=np.min(matrix), vmax=np.max(matrix))
     ax.set_xticks(np.arange(len(methods)), labels=methods)
     ax.set_yticks(np.arange(len(datasets)), labels=datasets)
-    ax.set_title("Dataset-wise Average Rank Heatmap", fontsize=_font(16.5), pad=10)
+    ax.set_title("Dataset-wise Average Rank Heatmap", fontsize=_font(16.5), fontweight="bold", pad=10)
+    style_framed_axes(ax, grid_axis=None)
     for tick, method in zip(ax.get_xticklabels(), methods):
         if method == "Ours":
             tick.set_fontweight("bold")
@@ -532,40 +618,56 @@ def render_ablation_acc_chart(path: Path, columns: list[str], rows: list[list[st
     parsed = [[_parse_mean_std(value) for value in row[1:]] for row in rows]
     matrix = np.array([[mean or 0.0 for mean, _ in row] for row in parsed], dtype=float)
 
-    x = np.arange(len(datasets))
-    width = 0.14
-    colors = ["#4E79A7", "#F28E2B", "#59A14F", "#B07AA1", "#E15759"]
+    n_cols = 3
+    n_rows = int(math.ceil(len(datasets) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6.0, 4.35), sharey=False, squeeze=False)
+    axes_arr = axes.ravel()
+    x = np.arange(len(variants))
+    y_max = max(90.0, float(np.max(matrix)) + 6.0)
+    legend_handles = []
+    legend_labels = []
 
-    fig, ax = plt.subplots(figsize=(12.8, 5.0))
-    for idx, variant in enumerate(variants):
-        offset = (idx - (len(variants) - 1) / 2.0) * width
-        ax.bar(
-            x + offset,
-            matrix[:, idx],
-            width=width * 0.92,
-            label=variant,
-            color=colors[idx % len(colors)],
+    for idx_ax, (ax, dataset, values) in enumerate(zip(axes_arr, datasets, matrix)):
+        bars = ax.bar(
+            x,
+            values,
+            width=0.72,
+            color=[ABLATION_COLORS[idx % len(ABLATION_COLORS)] for idx in range(len(variants))],
             edgecolor="none",
+            linewidth=0.0,
         )
+        if not legend_handles:
+            legend_handles = list(bars)
+            legend_labels = list(variants)
+        ax.set_title(dataset, fontsize=_font(11.2), fontweight="bold", pad=3)
+        ax.set_xticks(x, labels=variants)
+        ax.tick_params(axis="x", labelrotation=24, labelsize=_font(7.5), pad=1.0)
+        ax.tick_params(axis="y", labelsize=_font(7.8), pad=1.0)
+        ax.set_ylabel("ACC (%)", fontsize=_font(8.6), fontweight="bold", labelpad=1.0)
+        ax.set_ylim(0, y_max)
+        ax.set_box_aspect(1.0)
+        style_framed_axes(ax, grid_axis="y")
 
-    ax.set_ylabel("ACC (%)", fontsize=_font(14.5))
-    ax.set_xticks(x, labels=datasets)
-    ax.set_ylim(0, max(90.0, float(np.max(matrix)) + 8.0))
-    ax.grid(axis="y", color="#d8d8d8", linewidth=0.8, alpha=0.8)
-    ax.set_axisbelow(True)
-    ax.legend(
+    for ax in axes_arr[len(datasets):]:
+        ax.axis("off")
+
+    legend = fig.legend(
+        legend_handles,
+        legend_labels,
         ncol=len(variants),
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.16),
-        frameon=False,
-        fontsize=_font(12.5),
+        bbox_to_anchor=(0.5, 0.975),
+        frameon=True,
+        fontsize=_font(7.8),
+        handlelength=0.95,
+        handletextpad=0.25,
+        columnspacing=0.48,
+        borderpad=0.2,
+        labelspacing=0.15,
     )
-    for spine in ("top", "right", "left"):
-        ax.spines[spine].set_visible(False)
-    ax.spines["bottom"].set_color("#8a8a8a")
-    ax.tick_params(axis="both", labelsize=_font(12.5))
-    fig.tight_layout()
-    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.05)
+    style_legend(legend)
+    fig.subplots_adjust(left=0.07, right=0.995, bottom=0.08, top=0.90, wspace=0.02, hspace=0.30)
+    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.035)
     plt.close(fig)
 
 
@@ -580,24 +682,29 @@ def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[
     if not datasets:
         raise ValueError("Fixed fusion table has no dataset rows.")
 
-    n_cols = 3 if len(datasets) > 1 else 1
+    n_cols = 2 if len(datasets) > 1 else 1
     n_rows = int(math.ceil(len(datasets) / n_cols))
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.35 * n_cols, 4.55 * n_rows), sharey=False, squeeze=False)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.35, 7.0), sharey=False, squeeze=False)
     axes_arr = axes.ravel()
-    colors = {False: "#4E79A7", True: "#E15759"}
+    colors = {False: FIXED_COLOR, True: DCGL_COLOR}
     legend_handles = []
     legend_labels = []
-    all_scores = [_parse_float(row[column_index["Score"]]) for row in rows]
-    valid_scores = [score for score in all_scores if score is not None]
-    y_limits: tuple[float, float] | None = None
-    if valid_scores:
-        y_min = float(min(valid_scores))
-        y_max = float(max(valid_scores))
-        pad = max(2.0, (y_max - y_min) * 0.08)
-        y_limits = (y_min - pad, y_max + pad)
-
     for ax, dataset in zip(axes_arr, datasets):
         dataset_rows = [row for row in rows if row[column_index["Dataset"]] == dataset]
+        dataset_scores = [
+            score
+            for score in (_parse_float(row[column_index["Score"]]) for row in dataset_rows)
+            if score is not None
+        ]
+        y_limits: tuple[float, float] | None = None
+        if dataset_scores:
+            y_min = float(min(dataset_scores))
+            y_max = float(max(dataset_scores))
+            span = max(1e-6, y_max - y_min)
+            min_span = 4.0 if y_max >= 100.0 else 2.0
+            target_span = max(span * 1.18, min_span)
+            center = (y_min + y_max) / 2.0
+            y_limits = (center - target_span / 2.0, center + target_span / 2.0)
         for dcgl_flag in (False, True):
             fixed_rows = [
                 row
@@ -618,7 +725,8 @@ def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[
                     [point[0] for point in fixed_points],
                     [point[1] for point in fixed_points],
                     marker="o",
-                    lw=1.8,
+                    markersize=3.2,
+                    lw=1.0,
                     color=colors[dcgl_flag],
                     label=label,
                 )
@@ -642,10 +750,10 @@ def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[
                     [weight],
                     [score],
                     marker="o",
-                    s=170,
+                    s=58,
                     facecolor="white",
                     edgecolor=colors[dcgl_flag],
-                    linewidth=2.2,
+                    linewidth=1.25,
                     label=label,
                     zorder=4,
                 )
@@ -653,9 +761,9 @@ def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[
                     [weight],
                     [score],
                     marker="o",
-                    s=42,
-                    facecolor="black",
-                    edgecolor="black",
+                    s=11,
+                    facecolor=colors[dcgl_flag],
+                    edgecolor=colors[dcgl_flag],
                     linewidth=0.0,
                     zorder=5,
                 )
@@ -663,33 +771,39 @@ def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[
                     legend_handles.append(scatter)
                     legend_labels.append(label)
 
-        ax.set_title(dataset, fontsize=_font(15.0), pad=8)
-        ax.set_xlabel(r"Raw-graph weight $w_A$", fontsize=_font(13.5))
-        ax.set_ylabel("Composite score", fontsize=_font(13.5))
-        ax.grid(axis="y", color="#d8d8d8", linewidth=0.8, alpha=0.8)
-        ax.set_axisbelow(True)
+        ax.set_title(dataset, fontsize=_font(9.5), fontweight="bold", pad=1)
+        ax.set_xlabel(r"Raw-graph weight $w_A$", fontsize=_font(7.5), fontweight="bold", labelpad=0.5)
+        ax.set_ylabel("Composite score", fontsize=_font(7.5), fontweight="bold", labelpad=0.5)
+        style_framed_axes(ax, grid_axis="y")
         ax.set_xlim(-0.03, 1.03)
         if y_limits is not None:
             ax.set_ylim(*y_limits)
-        for spine in ("top", "right", "left"):
-            ax.spines[spine].set_visible(False)
-        ax.spines["bottom"].set_color("#8a8a8a")
-        ax.tick_params(axis="both", labelsize=_font(12.0))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.set_box_aspect(1.0)
+        ax.tick_params(axis="both", labelsize=_font(6.9), pad=0.6)
     for ax in axes_arr[len(datasets):]:
         ax.axis("off")
 
     if legend_handles:
-        fig.legend(
+        legend = fig.legend(
             legend_handles,
             legend_labels,
             ncol=min(4, len(legend_handles)),
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.02),
-            frameon=False,
-            fontsize=_font(12.2),
+            bbox_to_anchor=(0.5, 0.972),
+            frameon=True,
+            fontsize=_font(7.4),
+            handlelength=0.95,
+            handletextpad=0.24,
+            columnspacing=0.42,
+            borderpad=0.26,
+            labelspacing=0.18,
+            markerscale=0.7,
         )
-    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
-    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.05)
+        style_legend(legend, linewidth=1.0)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.952), h_pad=0.0, w_pad=-0.45)
+    fig.subplots_adjust(wspace=-0.06, hspace=0.17, top=0.93)
+    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.035)
     plt.close(fig)
 
 
@@ -723,6 +837,209 @@ def render_method_positioning_table(path: Path) -> None:
         bold_last_col=False,
         col_aligns=["left", "left", "center", "center", "center", "center"],
     )
+
+
+def load_hyperparameter_sensitivity_rows() -> tuple[list[str], list[list[str]], list[dict[str, float | str]]]:
+    aggregate_path = HYPERPARAM_SENSITIVITY_RUN / "aggregate.csv"
+    if not aggregate_path.exists():
+        raise FileNotFoundError(f"Missing hyperparameter sensitivity aggregate: {aggregate_path}")
+
+    label_map = {
+        "t": r"$t$",
+        "k_E": r"$k_E$",
+        "fusion_temp": r"$\tau_f$",
+        "lambda_clu": r"$\lambda_{\mathrm{clu}}$",
+    }
+    order = {"t": 0, "k_E": 1, "fusion_temp": 2, "lambda_clu": 3}
+
+    records: list[dict[str, float | str]] = []
+    with aggregate_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            param = row["param"]
+            if param not in order:
+                continue
+            records.append(
+                {
+                    "param": param,
+                    "label": label_map[param],
+                    "value": float(row["value"]),
+                    "avg_acc": float(row["avg_acc"]),
+                    "avg_acc_std": float(row.get("avg_acc_std") or 0.0),
+                    "avg_nmi": float(row["avg_nmi"]),
+                    "avg_ari": float(row["avg_ari"]),
+                    "avg_f1": float(row["avg_f1"]),
+                    "avg_score": float(row.get("avg_score") or 0.0),
+                }
+            )
+    records.sort(key=lambda item: (order[str(item["param"])], float(item["value"])))
+
+    columns = ["Parameter", "Value", "Avg ACC", "Avg NMI", "Avg ARI", "Avg F1"]
+    rows: list[list[str]] = []
+    last_param = None
+    for item in records:
+        param = str(item["param"])
+        value = int(item["value"]) if param in {"t", "k_E"} else float(item["value"])
+        value_text = f"{value:d}" if isinstance(value, int) else f"{value:.2f}".rstrip("0").rstrip(".")
+        rows.append(
+            [
+                str(item["label"]) if param != last_param else "",
+                value_text,
+                f"{float(item['avg_acc']):.2f}",
+                f"{float(item['avg_nmi']):.2f}",
+                f"{float(item['avg_ari']):.2f}",
+                f"{float(item['avg_f1']):.2f}",
+            ]
+        )
+        last_param = param
+    return columns, rows, records
+
+
+def load_hyperparameter_per_dataset_records() -> list[dict[str, float | str]]:
+    per_dataset_path = HYPERPARAM_SENSITIVITY_RUN / "per_dataset.csv"
+    if not per_dataset_path.exists():
+        raise FileNotFoundError(f"Missing hyperparameter sensitivity per-dataset CSV: {per_dataset_path}")
+
+    order = {"t": 0, "k_E": 1, "fusion_temp": 2, "lambda_clu": 3}
+    records: list[dict[str, float | str]] = []
+    with per_dataset_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            param = row["param"]
+            if param not in order or row.get("returncode") != "0":
+                continue
+            records.append(
+                {
+                    "dataset": row["dataset"],
+                    "param": param,
+                    "value": float(row["value"]),
+                    "acc_mean": float(row["acc_mean"]),
+                    "acc_std": float(row.get("acc_std") or 0.0),
+                }
+            )
+    records.sort(key=lambda item: (order[str(item["param"])], str(item["dataset"]), float(item["value"])))
+    return records
+
+
+def render_hyperparameter_sensitivity_chart(path: Path, records: list[dict[str, float | str]]) -> None:
+    grouped: dict[str, dict[str, list[dict[str, float | str]]]] = {}
+    for item in records:
+        grouped.setdefault(str(item["param"]), {}).setdefault(str(item["dataset"]), []).append(item)
+
+    panels = [
+        ("t", r"Propagation depth $t$"),
+        ("k_E", r"Refined graph $k_E$"),
+        ("fusion_temp", r"Fusion temperature $\tau_f$"),
+        ("lambda_clu", r"Cluster guidance $\lambda_{\mathrm{clu}}$"),
+    ]
+    dataset_labels = {
+        "reut": "Reuters",
+        "uat": "UAT",
+        "amap": "AMAP",
+        "usps": "USPS",
+        "cora": "Cora",
+        "cite": "Citeseer",
+    }
+    dataset_order = ["reut", "uat", "amap", "usps", "cora", "cite"]
+    dataset_colors = {
+        "reut": RAW_BLUE,
+        "uat": AE_ORANGE,
+        "amap": FUSION_GREEN,
+        "usps": CLUSTER_YELLOW,
+        "cora": MAIN_RED,
+        "cite": "#7f8790",
+    }
+    dataset_markers = {
+        "reut": "o",
+        "uat": "s",
+        "amap": "D",
+        "usps": "^",
+        "cora": "v",
+        "cite": "P",
+    }
+
+    fig, axes = plt.subplots(2, 2, figsize=(5.8, 4.35), sharey=False, squeeze=False)
+    axes_arr = axes.ravel()
+    for ax, (param, title) in zip(axes_arr, panels):
+        dataset_items = grouped.get(param, {})
+        if not dataset_items:
+            ax.axis("off")
+            continue
+
+        all_y: list[float] = []
+        all_x: list[float] = []
+        for dataset in dataset_order:
+            items = dataset_items.get(dataset, [])
+            if not items:
+                continue
+            x = np.array([float(item["value"]) for item in items], dtype=float)
+            y = np.array([float(item["acc_mean"]) for item in items], dtype=float)
+            all_x.extend(x.tolist())
+            all_y.extend(y.tolist())
+            ax.plot(
+                x,
+                y,
+                color=dataset_colors[dataset],
+                linewidth=1.08,
+                marker=dataset_markers[dataset],
+                markersize=3.0,
+                markerfacecolor=dataset_colors[dataset],
+                markeredgecolor=dataset_colors[dataset],
+                markeredgewidth=0.45,
+                alpha=0.93,
+                zorder=3,
+            )
+
+        if param == "k_E":
+            ax.axvline(15, color="#777777", linestyle="--", linewidth=0.7, alpha=0.62, zorder=1)
+        ax.set_title(title, fontsize=_font(11.6), fontweight="bold", pad=4)
+        ax.set_xlabel("Value", fontsize=_font(9.2), fontweight="bold", labelpad=1.5)
+        ax.set_ylabel("ACC (%)", fontsize=_font(9.2), fontweight="bold", labelpad=1.8)
+        ax.tick_params(axis="both", labelsize=_font(8.0), pad=1.0)
+        x_values = np.array(sorted(set(all_x)), dtype=float)
+        ax.set_xticks(x_values)
+        if param in {"fusion_temp", "lambda_clu"}:
+            ax.set_xticklabels([f"{val:.2f}".rstrip("0").rstrip(".") for val in x_values])
+        else:
+            ax.set_xticklabels([str(int(val)) for val in x_values])
+        y_min = float(np.min(all_y))
+        y_max = float(np.max(all_y))
+        pad = max(0.7, (y_max - y_min) * 0.10)
+        ax.set_ylim(y_min - pad, y_max + pad)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.set_box_aspect(0.82)
+        style_framed_axes(ax, grid_axis="y")
+
+    legend_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            color=dataset_colors[dataset],
+            marker=dataset_markers[dataset],
+            linewidth=1.08,
+            markersize=3.2,
+            markerfacecolor=dataset_colors[dataset],
+            markeredgecolor=dataset_colors[dataset],
+            label=dataset_labels[dataset],
+        )
+        for dataset in dataset_order
+    ]
+    legend = fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        ncol=6,
+        bbox_to_anchor=(0.5, 0.992),
+        frameon=True,
+        fontsize=_font(7.0),
+        handlelength=1.0,
+        handletextpad=0.24,
+        columnspacing=0.46,
+        borderpad=0.22,
+    )
+    style_legend(legend, linewidth=0.55)
+    fig.subplots_adjust(left=0.075, right=0.995, bottom=0.07, top=0.88, wspace=0.15, hspace=0.35)
+    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.035)
+    plt.close(fig)
 
 
 def load_markdown_table(section_title: str, *, group_col: int | None = None) -> tuple[list[str], list[list[str]]]:
@@ -934,7 +1251,7 @@ def main() -> None:
         row_unit=0.42,
         vertical_after=(0, 1),
         group_col=0,
-        bold_best=True,
+        bold_best=False,
         numeric_start_col=2,
     )
 
@@ -996,83 +1313,24 @@ def main() -> None:
         fixed_fusion_rows,
     )
 
-    hyper_rows = []
-    hyper_data = {
-        "fusion temp": [
-            ("1.0", "68.88", "49.45", "44.22", "63.40"),
-            ("1.3", "68.76", "49.08", "43.90", "63.47"),
-            ("1.6", "68.97", "49.31", "44.14", "63.84"),
-            ("1.9", "68.62", "49.16", "43.85", "63.43"),
-            ("2.2", "68.99", "49.49", "44.43", "63.76"),
-        ],
-        "min view weight": [
-            ("0.00", "68.55", "49.08", "44.29", "63.38"),
-            ("0.05", "68.69", "49.15", "44.12", "63.55"),
-            ("0.10", "68.90", "49.28", "44.26", "63.56"),
-            ("0.15", "68.78", "49.21", "44.03", "63.36"),
-            ("0.20", "68.28", "48.38", "43.24", "63.25"),
-        ],
-        "refined k": [
-            ("5", "68.93", "49.24", "44.23", "63.59"),
-            ("10", "68.90", "49.28", "44.26", "63.56"),
-            ("15", "68.88", "49.24", "44.23", "63.54"),
-            ("20", "68.92", "49.24", "44.22", "63.59"),
-            ("25", "68.90", "49.28", "44.26", "63.57"),
-        ],
-        "neg weight": [
-            ("0.0", "68.71", "49.20", "43.89", "63.45"),
-            ("0.2", "68.64", "49.06", "43.90", "63.40"),
-            ("0.4", "68.83", "49.27", "44.21", "63.97"),
-            ("0.6", "68.90", "49.27", "44.26", "63.56"),
-            ("0.8", "68.72", "49.19", "43.92", "63.78"),
-            ("1.0", "69.09", "49.46", "44.28", "64.09"),
-        ],
-        "fusion balance": [
-            ("0.00", "68.89", "49.38", "44.16", "63.46"),
-            ("0.05", "68.87", "49.27", "44.11", "63.52"),
-            ("0.10", "68.74", "49.20", "43.99", "63.49"),
-            ("0.20", "68.90", "49.19", "43.93", "63.42"),
-            ("0.35", "68.91", "49.28", "44.10", "63.54"),
-        ],
-        "lambda inst": [
-            ("0.00", "68.92", "49.24", "44.20", "63.45"),
-            ("0.03", "68.92", "49.23", "44.23", "63.65"),
-            ("0.06", "68.84", "49.22", "44.15", "63.45"),
-            ("0.08", "68.85", "49.28", "44.17", "63.54"),
-            ("0.10", "68.83", "49.23", "44.08", "63.46"),
-        ],
-        "lambda clu": [
-            ("0.00", "68.95", "49.28", "44.21", "63.63"),
-            ("0.01", "68.93", "49.24", "44.23", "63.59"),
-            ("0.03", "68.91", "49.30", "44.36", "63.49"),
-            ("0.05", "68.90", "49.22", "44.25", "63.53"),
-            ("0.07", "68.93", "49.22", "44.23", "63.65"),
-        ],
-        "neg tau": [
-            ("0.20", "68.67", "49.18", "44.18", "63.54"),
-            ("0.35", "68.81", "49.31", "44.06", "63.81"),
-            ("0.50", "68.90", "49.28", "44.26", "63.56"),
-            ("0.75", "68.72", "49.21", "44.20", "63.86"),
-            ("1.00", "68.75", "49.13", "44.10", "63.56"),
-        ],
-    }
-    for param, records in hyper_data.items():
-        for idx, record in enumerate(records):
-            hyper_rows.append([param if idx == 0 else "", *record])
-
+    hyper_columns, hyper_rows, hyper_records = load_hyperparameter_sensitivity_rows()
     render_table(
         ASSETS / "DSAFC_hyperparameter_sensitivity_table.png",
-        ["Parameter", "Value", "Avg ACC", "Avg NMI", "Avg ARI", "Avg F1"],
+        hyper_columns,
         hyper_rows,
-        col_widths=[1.9, 1.0, 1.15, 1.15, 1.15, 1.15],
-        fig_width=11.6,
-        font_size=13.6,
-        header_size=15.2,
-        row_unit=0.35,
+        col_widths=[1.55, 0.9, 1.15, 1.15, 1.15, 1.15],
+        fig_width=10.8,
+        font_size=13.0,
+        header_size=14.4,
+        row_unit=0.36,
         vertical_after=(0, 1),
         group_col=0,
         bold_best=True,
         numeric_start_col=2,
+    )
+    render_hyperparameter_sensitivity_chart(
+        ASSETS / "DSAFC_hyperparameter_sensitivity_acc.png",
+        load_hyperparameter_per_dataset_records(),
     )
 
 
