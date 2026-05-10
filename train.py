@@ -347,6 +347,244 @@ def _compute_branch_reliability_score(hidden_emb, predict_labels_t, high_confide
     return torch.clamp(score.detach(), min=0.0, max=1.0)
 
 
+def _fusion_reliability_feedback_loss(
+    fusion_mean,
+    adaptive_bias_state,
+    raw_reliability,
+    ae_reliability,
+    args,
+    branch_losses=None,
+):
+    target = None
+    source = None
+    dtype = fusion_mean.dtype
+    device = fusion_mean.device
+
+    prior_target = adaptive_bias_state.get("target")
+    has_runtime = raw_reliability is not None and ae_reliability is not None
+    if prior_target in ("raw", "ae") or (args.fusion_feedback_use_runtime_reliability and has_runtime):
+        if has_runtime:
+            scores = torch.stack([
+                raw_reliability.to(device=device, dtype=dtype),
+                ae_reliability.to(device=device, dtype=dtype),
+            ])
+            scores = scores - torch.mean(scores)
+        else:
+            scores = torch.zeros(2, dtype=dtype, device=device)
+
+        if prior_target in ("raw", "ae"):
+            prior_strength = max(0.0, float(args.fusion_feedback_prior_strength))
+            if prior_target == "raw":
+                scores = scores + torch.tensor([0.5 * prior_strength, -0.5 * prior_strength], dtype=dtype, device=device)
+            else:
+                scores = scores + torch.tensor([-0.5 * prior_strength, 0.5 * prior_strength], dtype=dtype, device=device)
+            source = str(adaptive_bias_state.get("source", "adaptive"))
+            if has_runtime:
+                source = source + "+runtime"
+        else:
+            source = "runtime"
+
+        target = F.softmax(scores / max(1e-6, float(args.fusion_feedback_temp)), dim=0)
+        floor = min(0.49, max(0.0, float(args.fusion_feedback_min_weak_weight)))
+        target = floor + (1.0 - 2.0 * floor) * target
+
+    if target is None:
+        return None, None
+
+    target_detached = target.detach()
+    if args.fusion_feedback_loss_type == "barrier":
+        weights = torch.clamp(fusion_mean, min=1e-8, max=1.0)
+        coeff = torch.ones_like(weights)
+        if target is not None:
+            coeff = target_detached / torch.clamp(torch.mean(target_detached), min=1e-8)
+        if branch_losses is not None:
+            branch_losses_t = torch.stack(branch_losses).to(device=device, dtype=dtype).detach()
+            branch_losses_t = branch_losses_t / torch.clamp(torch.mean(branch_losses_t), min=1e-8)
+            loss_pref = F.softmax(-branch_losses_t / max(1e-6, float(args.fusion_feedback_loss_temp)), dim=0)
+            loss_pref = loss_pref / torch.clamp(torch.mean(loss_pref), min=1e-8)
+            loss_blend = min(1.0, max(0.0, float(args.fusion_feedback_loss_blend)))
+            coeff = (1.0 - loss_blend) * coeff + loss_blend * loss_pref
+        coeff = torch.clamp(
+            coeff,
+            min=float(args.fusion_feedback_min_barrier_coeff),
+            max=float(args.fusion_feedback_max_barrier_coeff),
+        )
+        loss = -torch.sum(coeff.detach() * torch.log(weights)) / torch.clamp(torch.sum(coeff.detach()), min=1e-8)
+    elif args.fusion_feedback_loss_type == "selective_countergrad":
+        # Selective counter-gradient feedback. The branch-weighted objective is
+        # allowed to keep moving attention when its gradient agrees with the
+        # reliability evidence. This term only pushes back when the branch-loss
+        # shortcut would increase the unreliable branch weight.
+        if branch_losses is None:
+            return None, None
+        weights = torch.clamp(fusion_mean, min=1e-8, max=1.0)
+        trusted_idx = 0 if target_detached[0] >= target_detached[1] else 1
+        wrong_idx = 1 - trusted_idx
+        branch_losses_t = torch.stack(branch_losses).to(device=device, dtype=dtype).detach()
+        shortcut_grad = branch_losses_t[wrong_idx] - branch_losses_t[trusted_idx]
+        conflict_strength = torch.relu(-shortcut_grad)
+        target_wrong = torch.clamp(
+            target_detached[wrong_idx],
+            min=max(1e-6, float(args.fusion_feedback_min_weak_weight)),
+            max=0.49,
+        )
+        wrong_weight = weights[wrong_idx]
+        curvature = max(0.0, float(args.fusion_feedback_countergrad_curvature))
+        base = max(0.0, float(args.fusion_feedback_countergrad_base))
+        boundary_excess = torch.relu(wrong_weight - target_wrong)
+        loss = (
+            conflict_strength * wrong_weight
+            + 0.5 * curvature * conflict_strength * boundary_excess ** 2
+            + base * F.mse_loss(weights, target_detached)
+        )
+        coeff = torch.zeros_like(weights)
+        coeff[trusted_idx] = 1.0
+        coeff[wrong_idx] = float(curvature)
+    elif args.fusion_feedback_loss_type == "countergrad":
+        # Counter-gradient feedback for the branch-loss shortcut. With two
+        # normalized weights, the branch objective contributes
+        # dL/dq = L_wrong - L_trusted to the weak/wrong branch weight q. This
+        # term adds the opposite detached gradient and a small curvature around
+        # the reliability target, so the loss has a real equilibrium instead
+        # of letting q run to 0 or 1.
+        if branch_losses is None:
+            return None, None
+        weights = torch.clamp(fusion_mean, min=1e-8, max=1.0)
+        trusted_idx = 0 if target_detached[0] >= target_detached[1] else 1
+        wrong_idx = 1 - trusted_idx
+        branch_losses_t = torch.stack(branch_losses).to(device=device, dtype=dtype).detach()
+        shortcut_grad = branch_losses_t[wrong_idx] - branch_losses_t[trusted_idx]
+        target_wrong = torch.clamp(
+            target_detached[wrong_idx],
+            min=max(1e-6, float(args.fusion_feedback_min_weak_weight)),
+            max=0.49,
+        )
+        wrong_weight = weights[wrong_idx]
+        curvature = max(0.0, float(args.fusion_feedback_countergrad_curvature))
+        base = max(0.0, float(args.fusion_feedback_countergrad_base))
+        loss = (
+            -shortcut_grad * wrong_weight
+            + 0.5 * curvature * torch.abs(shortcut_grad) * (wrong_weight - target_wrong) ** 2
+            + base * F.mse_loss(weights, target_detached)
+        )
+        coeff = torch.zeros_like(weights)
+        coeff[trusted_idx] = 1.0
+        coeff[wrong_idx] = float(curvature)
+    elif args.fusion_feedback_loss_type == "shortcut":
+        # Directly counter the branch-loss shortcut. If the branch with lower
+        # training loss contradicts the reliability evidence, ordinary
+        # branch-weighted loss pulls attention toward that branch. This
+        # quadratic term adds a differentiable negative feedback whose
+        # equilibrium is set by the reliability target, without clamping the
+        # forward weights.
+        if branch_losses is None:
+            return None, None
+        weights = torch.clamp(fusion_mean, min=1e-8, max=1.0)
+        trusted_idx = 0 if target_detached[0] >= target_detached[1] else 1
+        wrong_idx = 1 - trusted_idx
+        branch_losses_t = torch.stack(branch_losses).to(device=device, dtype=dtype).detach()
+        advantage = torch.relu(branch_losses_t[trusted_idx] - branch_losses_t[wrong_idx])
+        target_wrong = torch.clamp(
+            target_detached[wrong_idx],
+            min=max(1e-6, float(args.fusion_feedback_min_weak_weight)),
+            max=0.49,
+        )
+        wrong_weight = weights[wrong_idx]
+        gain = max(0.0, float(args.fusion_feedback_shortcut_gain))
+        loss = gain * advantage * (wrong_weight ** 2) / (2.0 * target_wrong)
+        coeff = torch.zeros_like(weights)
+        coeff[trusted_idx] = 1.0
+        coeff[wrong_idx] = float(gain)
+    elif args.fusion_feedback_loss_type == "controller":
+        # Boundary-aware loss-level negative feedback. The ordinary branch
+        # weighted loss can pull attention toward the currently easier view;
+        # this term only becomes strong near collapse and pushes back through
+        # gradients on the attention weights. It does not clamp the forward
+        # weights or impose a fixed minimum.
+        weights = torch.clamp(fusion_mean, min=1e-8, max=1.0)
+        if branch_losses is not None:
+            branch_losses_t = torch.stack(branch_losses).to(device=device, dtype=dtype).detach()
+            branch_losses_t = branch_losses_t / torch.clamp(torch.mean(branch_losses_t), min=1e-8)
+            loss_pref = F.softmax(-branch_losses_t / max(1e-6, float(args.fusion_feedback_loss_temp)), dim=0)
+            loss_pref = loss_pref.detach()
+            loss_gap = torch.abs(branch_losses_t[0] - branch_losses_t[1])
+        else:
+            loss_pref = torch.full_like(weights, 0.5)
+            loss_gap = torch.tensor(0.0, dtype=dtype, device=device)
+
+        prior_blend = min(1.0, max(0.0, float(args.fusion_feedback_prior_blend)))
+        evidence = (1.0 - prior_blend) * loss_pref + prior_blend * target_detached
+        evidence = evidence / torch.clamp(torch.sum(evidence), min=1e-8)
+
+        # Evidence decides which side may dominate. The controller provides a
+        # weak always-on reliability gradient, then amplifies it when the
+        # attention crosses into the opposite-side majority. This is negative
+        # feedback in the loss, not a forward clamp.
+        coeff = evidence / torch.clamp(torch.mean(evidence), min=1e-8)
+        coeff = torch.clamp(
+            coeff,
+            min=float(args.fusion_feedback_min_barrier_coeff),
+            max=float(args.fusion_feedback_max_barrier_coeff),
+        )
+        target_ce = -torch.sum(evidence.detach() * torch.log(weights))
+        raw_is_trusted = evidence[0] >= evidence[1]
+        weak_weight = weights[1] if raw_is_trusted else weights[0]
+        wrong_gate = torch.sigmoid(
+            (weak_weight - float(args.fusion_feedback_wrong_branch_margin))
+            * max(1e-6, float(args.fusion_feedback_boundary_sharpness))
+        )
+        barrier = -torch.sum(coeff.detach() * torch.log(weights)) / torch.clamp(torch.sum(coeff.detach()), min=1e-8)
+        weak_violation = torch.relu(weak_weight - float(args.fusion_feedback_wrong_branch_margin)) ** 2
+        adaptive_scale = 1.0 + min(10.0, max(0.0, float(args.fusion_feedback_loss_gap_gain))) * loss_gap.detach()
+        loss = adaptive_scale * (
+            float(args.fusion_feedback_controller_base) * target_ce
+            + wrong_gate * float(args.fusion_feedback_controller_boost) * barrier
+            + wrong_gate * weak_violation
+        )
+    elif args.fusion_feedback_loss_type == "violation":
+        # Negative feedback only when attention assigns more mass than the
+        # reliability controller allows. If it has already self-corrected past
+        # the boundary, no fixed minimum is imposed on the weak branch.
+        loss = torch.mean(torch.relu(fusion_mean - target_detached) ** 2)
+    else:
+        loss = F.mse_loss(fusion_mean, target_detached)
+    state = {
+        "source": source,
+        "mode": args.fusion_feedback_loss_type,
+        "target_raw": float(target[0].detach().cpu().item()),
+        "target_ae": float(target[1].detach().cpu().item()),
+        "loss": float(loss.detach().cpu().item()),
+    }
+    if branch_losses is not None:
+        state["branch_loss_raw"] = float(branch_losses[0].detach().cpu().item())
+        state["branch_loss_ae"] = float(branch_losses[1].detach().cpu().item())
+    if args.fusion_feedback_loss_type in ("barrier", "controller"):
+        state["coeff_raw"] = float(coeff[0].detach().cpu().item())
+        state["coeff_ae"] = float(coeff[1].detach().cpu().item())
+        state["weak_w"] = float(torch.min(fusion_mean).detach().cpu().item())
+        if args.fusion_feedback_loss_type == "controller":
+            state["collapse_start"] = float(args.fusion_feedback_wrong_branch_margin)
+            state["collapse_gate"] = float(wrong_gate.detach().cpu().item())
+            state["loss_gap"] = float(loss_gap.detach().cpu().item())
+            state["adaptive_scale"] = float(adaptive_scale.detach().cpu().item())
+    if args.fusion_feedback_loss_type == "shortcut":
+        state["coeff_raw"] = float(coeff[0].detach().cpu().item())
+        state["coeff_ae"] = float(coeff[1].detach().cpu().item())
+        state["weak_w"] = float(torch.min(fusion_mean).detach().cpu().item())
+        state["loss_gap"] = float(advantage.detach().cpu().item())
+        state["adaptive_scale"] = float(args.fusion_feedback_shortcut_gain)
+    if args.fusion_feedback_loss_type in ("countergrad", "selective_countergrad"):
+        state["coeff_raw"] = float(coeff[0].detach().cpu().item())
+        state["coeff_ae"] = float(coeff[1].detach().cpu().item())
+        state["weak_w"] = float(torch.min(fusion_mean).detach().cpu().item())
+        state["loss_gap"] = float(shortcut_grad.detach().cpu().item())
+        state["adaptive_scale"] = float(args.fusion_feedback_countergrad_curvature)
+    if has_runtime:
+        state["raw_rel"] = float(raw_reliability.detach().cpu().item())
+        state["ae_rel"] = float(ae_reliability.detach().cpu().item())
+    return loss, state
+
+
 def _edge_count(adj):
     return int(adj.nnz // 2)
 
@@ -378,10 +616,10 @@ def _compute_adaptive_structure_prior(adj_a, adj_ae, features, args):
     """
     Conservative graph-level reliability prior for adaptive branch bias.
 
-    This is intentionally a no-op for most datasets. It only raw-anchors the
-    fusion when the released/raw graph is sparse and the AE graph introduces many
-    new edges without a large feature-consistency gain. That pattern matches the
-    citation-graph failure mode where unconstrained attention over-trusts AE.
+    This is intentionally a no-op for most datasets. It raw-anchors fusion only
+    when graph diagnostics show that the refined graph is an unsafe correction:
+    citation-like sparse features with many weak-gain AE edges, or dense features
+    where the AE edges measurably reduce edge-feature consistency.
     """
     if getattr(args, "disable_adaptive_structure_prior", False):
         return None
@@ -425,6 +663,10 @@ def _compute_adaptive_structure_prior(adj_a, adj_ae, features, args):
         feature_density <= float(args.adaptive_bias_feature_density_max)
         and nonzero_abs_mean <= float(args.adaptive_bias_nonzero_abs_mean_max)
     )
+    dense_feature_degradation = (
+        feature_density >= float(args.adaptive_bias_dense_feature_density_min)
+        and feature_gain <= float(args.adaptive_bias_feature_loss_max)
+    )
     sparse_raw = raw_degree <= float(args.adaptive_bias_sparse_raw_degree_max)
     ae_much_denser = degree_ratio >= float(args.adaptive_bias_ae_degree_ratio_min)
     mostly_new = new_edge_ratio >= float(args.adaptive_bias_new_edge_ratio_min)
@@ -444,6 +686,18 @@ def _compute_adaptive_structure_prior(adj_a, adj_ae, features, args):
             "source": "structure",
             "diag": diag,
         }
+    if (
+        dense_feature_degradation
+        and sparse_raw
+        and ae_much_denser
+        and mostly_new
+    ):
+        return {
+            "target": "raw",
+            "cap": float(args.adaptive_bias_cap),
+            "source": "structure_feature_degradation",
+            "diag": diag,
+        }
 
     return {
         "target": None,
@@ -451,6 +705,10 @@ def _compute_adaptive_structure_prior(adj_a, adj_ae, features, args):
         "source": "none",
         "diag": diag,
     }
+
+
+def _is_structure_prior_source(state):
+    return str(state.get("source", "")).startswith("structure")
 
 
 def _resolve_adaptive_bias_start(args):
@@ -513,6 +771,48 @@ def _adaptive_branch_bias_cap(state, epoch, args):
     ramp_epochs = max(1, int(args.adaptive_bias_ramp_epochs))
     ramp = min(1.0, max(0.0, float(epoch - activated_epoch + 1) / float(ramp_epochs)))
     return ramp * float(args.adaptive_bias_cap)
+
+
+def _update_fusion_collapse_guard_state(state, fusion_mean, epoch, args):
+    if not args.enable_fusion_collapse_guard:
+        return 0.0
+
+    start_epoch = int(args.fusion_collapse_guard_start_epoch)
+    if start_epoch < 0:
+        start_epoch = int(args.warmup_epochs)
+    end_epoch = int(args.fusion_collapse_guard_end_epoch)
+    if end_epoch < 0:
+        end_epoch = int(args.epochs)
+    if epoch < start_epoch or epoch > end_epoch:
+        state["candidate_count"] = 0
+        state["floor"] = 0.0
+        return 0.0
+
+    weights = fusion_mean.detach()
+    dominant = float(torch.max(weights).cpu().item())
+    collapsed = dominant >= float(args.fusion_collapse_guard_threshold)
+    if collapsed:
+        state["candidate_count"] = int(state.get("candidate_count", 0)) + 1
+    else:
+        state["candidate_count"] = 0
+
+    if int(state.get("candidate_count", 0)) < int(args.fusion_collapse_guard_patience):
+        state["floor"] = 0.0
+        return 0.0
+
+    activated_epoch = state.get("activated_epoch")
+    if activated_epoch is None:
+        state["activated_epoch"] = int(epoch)
+        activated_epoch = int(epoch)
+
+    release_epochs = max(1, int(args.fusion_collapse_guard_release_epochs))
+    age = max(0, int(epoch) - int(activated_epoch))
+    release = max(0.0, 1.0 - float(age) / float(release_epochs))
+    floor = float(args.fusion_collapse_guard_floor) * release
+    state["floor"] = floor
+    return floor
+
+
 ### ---------------------------------------
 
 
@@ -924,6 +1224,65 @@ parser.add_argument('--fusion_balance', type=float, default=0.0,
                     help='optional balance regularization weight for attention fusion')
 parser.add_argument('--fusion_min_weight', type=float, default=0.0,
                     help='minimum per-branch fusion weight when fusion_mode=attn (0~0.49)')
+parser.add_argument('--enable_fusion_reliability_feedback_loss', action='store_true',
+                    help='decouple fusion-weight learning from branch-loss shortcut and train it with reliability feedback')
+parser.add_argument('--fusion_feedback_weight', type=float, default=1.0,
+                    help='weight for reliability feedback loss applied to attention fusion')
+parser.add_argument('--fusion_feedback_temp', type=float, default=0.25,
+                    help='temperature for runtime reliability feedback target')
+parser.add_argument('--fusion_feedback_min_weak_weight', type=float, default=0.02,
+                    help='minimum weak-branch target used by reliability feedback')
+parser.add_argument('--fusion_feedback_prior_strength', type=float, default=1.0,
+                    help='logit-scale structure-prior evidence used by reliability feedback')
+parser.add_argument('--fusion_feedback_warmup_ramp_epochs', type=int, default=20,
+                    help='epochs used to ramp reliability feedback during reconstruction warmup')
+parser.add_argument('--fusion_feedback_use_runtime_reliability', action='store_true',
+                    help='use embedding reliability scores as fusion feedback when no structure prior is active')
+parser.add_argument('--fusion_feedback_loss_type', type=str, default='mse',
+                    choices=['mse', 'violation', 'barrier', 'controller', 'shortcut', 'countergrad', 'selective_countergrad'],
+                    help='reliability feedback loss type for attention weights')
+parser.add_argument('--fusion_feedback_loss_temp', type=float, default=0.25,
+                    help='temperature that converts branch losses into reliability evidence')
+parser.add_argument('--fusion_feedback_loss_blend', type=float, default=0.35,
+                    help='branch-loss evidence blend for barrier feedback')
+parser.add_argument('--fusion_feedback_prior_blend', type=float, default=0.70,
+                    help='structure-prior evidence blend for controller feedback')
+parser.add_argument('--fusion_feedback_min_barrier_coeff', type=float, default=0.08,
+                    help='minimum log-barrier coefficient for the weaker evidence branch')
+parser.add_argument('--fusion_feedback_max_barrier_coeff', type=float, default=4.0,
+                    help='maximum log-barrier coefficient for the stronger evidence branch')
+parser.add_argument('--fusion_feedback_boundary_sharpness', type=float, default=24.0,
+                    help='sharpness of controller activation near collapse boundary')
+parser.add_argument('--fusion_feedback_wrong_branch_margin', type=float, default=0.50,
+                    help='wrong-side branch weight that activates stronger controller feedback')
+parser.add_argument('--fusion_feedback_controller_base', type=float, default=0.20,
+                    help='always-on reliability controller strength inside feedback loss')
+parser.add_argument('--fusion_feedback_controller_boost', type=float, default=1.50,
+                    help='extra controller strength after wrong-side activation')
+parser.add_argument('--fusion_feedback_loss_gap_gain', type=float, default=0.0,
+                    help='increase controller strength when detached branch losses disagree strongly')
+parser.add_argument('--fusion_feedback_shortcut_gain', type=float, default=1.0,
+                    help='gain for shortcut-cancellation feedback loss')
+parser.add_argument('--fusion_feedback_countergrad_curvature', type=float, default=1.0,
+                    help='curvature around reliability target for counter-gradient feedback')
+parser.add_argument('--fusion_feedback_countergrad_base', type=float, default=0.05,
+                    help='small MSE anchor weight used by counter-gradient feedback')
+parser.add_argument('--fusion_feedback_detach_branch_loss', action='store_true',
+                    help='detach fusion weights from branch losses and train them only through reliability feedback')
+parser.add_argument('--enable_learnable_boundary_gate', action='store_true',
+                    help='enable learnable attention-boundary self-correction near extreme fusion weights')
+parser.add_argument('--boundary_gate_max_floor', type=float, default=0.20,
+                    help='maximum learnable symmetric correction floor for boundary gate')
+parser.add_argument('--boundary_gate_init_floor', type=float, default=0.03,
+                    help='initial correction floor for learnable boundary gate')
+parser.add_argument('--boundary_gate_min_threshold', type=float, default=0.75,
+                    help='lower bound for learned dominant-weight threshold')
+parser.add_argument('--boundary_gate_max_threshold', type=float, default=0.98,
+                    help='upper bound for learned dominant-weight threshold')
+parser.add_argument('--boundary_gate_init_threshold', type=float, default=0.92,
+                    help='initial dominant-weight threshold for learnable boundary gate')
+parser.add_argument('--boundary_gate_sharpness', type=float, default=30.0,
+                    help='smoothness of boundary-gate activation near the learned threshold')
 parser.add_argument('--enable_branch_bias_fusion', action='store_true',
                     help='enable optional branch-biased attn fusion; default OFF keeps the current attn behavior unchanged')
 parser.add_argument('--branch_bias_target', type=str, default='raw', choices=['raw', 'ae'],
@@ -948,6 +1307,12 @@ parser.add_argument('--adaptive_bias_ramp_epochs', type=int, default=20,
                     help='epochs used to ramp the adaptive branch-bias cap after activation')
 parser.add_argument('--adaptive_bias_ema', type=float, default=0.8,
                     help='EMA momentum for the raw-vs-AE branch reliability margin')
+parser.add_argument('--adaptive_bias_mode', type=str, default='cap', choices=['boundary', 'cap'],
+                    help='internal adaptive-fusion correction mode when a reliable branch is selected')
+parser.add_argument('--adaptive_boundary_sharpness', type=float, default=24.0,
+                    help='sharpness of the internal adaptive fusion boundary correction')
+parser.add_argument('--adaptive_boundary_tighten', type=float, default=0.0,
+                    help='extra weak-branch cap tightening after adaptive boundary activation')
 parser.add_argument('--adaptive_bias_sparse_raw_degree_max', type=float, default=12.0,
                     help='raw average degree upper bound for conservative structure-prior raw anchoring')
 parser.add_argument('--adaptive_bias_ae_degree_ratio_min', type=float, default=1.7,
@@ -962,6 +1327,24 @@ parser.add_argument('--adaptive_bias_feature_density_max', type=float, default=0
                     help='maximum feature density for conservative citation-like raw anchoring')
 parser.add_argument('--adaptive_bias_nonzero_abs_mean_max', type=float, default=1.05,
                     help='maximum mean absolute nonzero feature value for conservative citation-like raw anchoring')
+parser.add_argument('--adaptive_bias_dense_feature_density_min', type=float, default=0.05,
+                    help='minimum feature density for dense-feature AE degradation diagnostics')
+parser.add_argument('--adaptive_bias_feature_loss_max', type=float, default=-0.02,
+                    help='maximum AE-minus-raw edge feature-cosine gain that indicates AE degradation')
+parser.add_argument('--enable_fusion_collapse_guard', action='store_true',
+                    help='enable bounded self-correction when attention fusion collapses before reliability evidence is stable')
+parser.add_argument('--fusion_collapse_guard_threshold', type=float, default=0.95,
+                    help='dominant average fusion weight threshold that indicates premature single-view dominance')
+parser.add_argument('--fusion_collapse_guard_patience', type=int, default=10,
+                    help='number of consecutive epochs above the collapse threshold before the guard activates')
+parser.add_argument('--fusion_collapse_guard_floor', type=float, default=0.05,
+                    help='temporary symmetric floor applied by the collapse guard; permanent fusion_min_weight can stay 0')
+parser.add_argument('--fusion_collapse_guard_start_epoch', type=int, default=-1,
+                    help='epoch to start collapse monitoring; -1 uses warmup_epochs')
+parser.add_argument('--fusion_collapse_guard_end_epoch', type=int, default=-1,
+                    help='epoch to stop collapse monitoring; -1 uses total epochs')
+parser.add_argument('--fusion_collapse_guard_release_epochs', type=int, default=80,
+                    help='epochs over which the collapse guard floor decays after activation')
 parser.add_argument('--runs', type=int, default=10,
                     help='number of independent training runs; default keeps the paper setting')
 parser.add_argument('--seed_start', type=int, default=0,
@@ -987,12 +1370,41 @@ if args.enable_improved_ccgc:
 
 args.fusion_min_weight = min(0.49, max(0.0, float(args.fusion_min_weight)))
 args.fixed_raw_weight = min(1.0, max(0.0, float(args.fixed_raw_weight)))
+args.fusion_feedback_weight = max(0.0, float(args.fusion_feedback_weight))
+args.fusion_feedback_temp = max(1e-6, float(args.fusion_feedback_temp))
+args.fusion_feedback_min_weak_weight = min(0.49, max(0.0, float(args.fusion_feedback_min_weak_weight)))
+args.fusion_feedback_prior_strength = max(0.0, float(args.fusion_feedback_prior_strength))
+args.fusion_feedback_warmup_ramp_epochs = max(1, int(args.fusion_feedback_warmup_ramp_epochs))
+args.fusion_feedback_loss_temp = max(1e-6, float(args.fusion_feedback_loss_temp))
+args.fusion_feedback_loss_blend = min(1.0, max(0.0, float(args.fusion_feedback_loss_blend)))
+args.fusion_feedback_prior_blend = min(1.0, max(0.0, float(args.fusion_feedback_prior_blend)))
+args.fusion_feedback_min_barrier_coeff = max(1e-6, float(args.fusion_feedback_min_barrier_coeff))
+args.fusion_feedback_max_barrier_coeff = max(
+    args.fusion_feedback_min_barrier_coeff,
+    float(args.fusion_feedback_max_barrier_coeff),
+)
+args.fusion_feedback_boundary_sharpness = max(1e-6, float(args.fusion_feedback_boundary_sharpness))
+args.fusion_feedback_wrong_branch_margin = min(0.99, max(0.01, float(args.fusion_feedback_wrong_branch_margin)))
+args.fusion_feedback_controller_base = max(0.0, float(args.fusion_feedback_controller_base))
+args.fusion_feedback_controller_boost = max(0.0, float(args.fusion_feedback_controller_boost))
+args.fusion_feedback_loss_gap_gain = max(0.0, float(args.fusion_feedback_loss_gap_gain))
+args.fusion_feedback_shortcut_gain = max(0.0, float(args.fusion_feedback_shortcut_gain))
+args.fusion_feedback_countergrad_curvature = max(0.0, float(args.fusion_feedback_countergrad_curvature))
+args.fusion_feedback_countergrad_base = max(0.0, float(args.fusion_feedback_countergrad_base))
+args.boundary_gate_max_floor = min(0.49, max(0.0, float(args.boundary_gate_max_floor)))
+args.boundary_gate_init_floor = min(args.boundary_gate_max_floor, max(0.0, float(args.boundary_gate_init_floor)))
+args.boundary_gate_min_threshold = min(0.999, max(0.5, float(args.boundary_gate_min_threshold)))
+args.boundary_gate_max_threshold = min(0.999, max(args.boundary_gate_min_threshold + 1e-6, float(args.boundary_gate_max_threshold)))
+args.boundary_gate_init_threshold = min(args.boundary_gate_max_threshold, max(args.boundary_gate_min_threshold, float(args.boundary_gate_init_threshold)))
+args.boundary_gate_sharpness = max(1e-6, float(args.boundary_gate_sharpness))
 args.branch_bias_cap = min(0.49, max(0.0, float(args.branch_bias_cap)))
 args.adaptive_bias_margin = max(0.0, float(args.adaptive_bias_margin))
 args.adaptive_bias_patience = max(1, int(args.adaptive_bias_patience))
 args.adaptive_bias_cap = min(0.49, max(0.0, float(args.adaptive_bias_cap)))
 args.adaptive_bias_ramp_epochs = max(1, int(args.adaptive_bias_ramp_epochs))
 args.adaptive_bias_ema = min(0.999, max(0.0, float(args.adaptive_bias_ema)))
+args.adaptive_boundary_sharpness = max(1e-6, float(args.adaptive_boundary_sharpness))
+args.adaptive_boundary_tighten = min(0.95, max(0.0, float(args.adaptive_boundary_tighten)))
 args.adaptive_bias_sparse_raw_degree_max = max(0.0, float(args.adaptive_bias_sparse_raw_degree_max))
 args.adaptive_bias_ae_degree_ratio_min = max(0.0, float(args.adaptive_bias_ae_degree_ratio_min))
 args.adaptive_bias_new_edge_ratio_min = min(1.0, max(0.0, float(args.adaptive_bias_new_edge_ratio_min)))
@@ -1000,6 +1412,12 @@ args.adaptive_bias_feature_gain_max = float(args.adaptive_bias_feature_gain_max)
 args.adaptive_bias_raw_feature_cos_max = min(1.0, max(-1.0, float(args.adaptive_bias_raw_feature_cos_max)))
 args.adaptive_bias_feature_density_max = min(1.0, max(0.0, float(args.adaptive_bias_feature_density_max)))
 args.adaptive_bias_nonzero_abs_mean_max = max(0.0, float(args.adaptive_bias_nonzero_abs_mean_max))
+args.adaptive_bias_dense_feature_density_min = min(1.0, max(0.0, float(args.adaptive_bias_dense_feature_density_min)))
+args.adaptive_bias_feature_loss_max = float(args.adaptive_bias_feature_loss_max)
+args.fusion_collapse_guard_threshold = min(0.999, max(0.5, float(args.fusion_collapse_guard_threshold)))
+args.fusion_collapse_guard_patience = max(1, int(args.fusion_collapse_guard_patience))
+args.fusion_collapse_guard_floor = min(0.49, max(0.0, float(args.fusion_collapse_guard_floor)))
+args.fusion_collapse_guard_release_epochs = max(1, int(args.fusion_collapse_guard_release_epochs))
 args.dynamic_threshold_start = min(0.999, max(1e-6, float(args.dynamic_threshold_start)))
 args.dynamic_threshold_end = min(0.999, max(1e-6, float(args.dynamic_threshold_end)))
 args.ema_proto_momentum = min(0.999, max(0.0, float(args.ema_proto_momentum)))
@@ -1121,6 +1539,16 @@ for run_idx in range(args.runs):
             enable_branch_bias_fusion=(args.enable_branch_bias_fusion and not args.enable_adaptive_branch_bias),
             branch_bias_target=args.branch_bias_target,
             branch_bias_cap=args.branch_bias_cap,
+            enable_learnable_boundary_gate=args.enable_learnable_boundary_gate,
+            boundary_gate_max_floor=args.boundary_gate_max_floor,
+            boundary_gate_init_floor=args.boundary_gate_init_floor,
+            boundary_gate_min_threshold=args.boundary_gate_min_threshold,
+            boundary_gate_max_threshold=args.boundary_gate_max_threshold,
+            boundary_gate_init_threshold=args.boundary_gate_init_threshold,
+            boundary_gate_sharpness=args.boundary_gate_sharpness,
+            adaptive_bias_mode=args.adaptive_bias_mode,
+            adaptive_boundary_sharpness=args.adaptive_boundary_sharpness,
+            adaptive_boundary_tighten=args.adaptive_boundary_tighten,
         ).to(args.device)
         optimizer = optim.Adam(
             list(model.parameters()) + list(fusion_module.parameters()),
@@ -1141,6 +1569,9 @@ for run_idx in range(args.runs):
     ema_state_a = {} if args.enable_ema_prototypes else None
     ema_state_ae = {} if args.enable_ema_prototypes else None
     adaptive_bias_state = {}
+    collapse_guard_state = {}
+    fusion_trace = []
+    fusion_feedback_state = None
     if args.graph_mode == 'dual' and args.enable_adaptive_branch_bias and adaptive_structure_prior is not None:
         prior_target = adaptive_structure_prior.get("target")
         if prior_target in ("raw", "ae"):
@@ -1181,6 +1612,21 @@ for run_idx in range(args.runs):
             ### ---------------------------------------
             hidden_emb_a = (z1_a + z2_a) / 2
             hidden_emb_ae = (z1_ae + z2_ae) / 2
+            if fusion_module is not None:
+                fusion_module.set_collapse_guard(0.0)
+                if args.enable_adaptive_branch_bias:
+                    if args.enable_fusion_reliability_feedback_loss:
+                        # In feedback mode the structure prior supervises the
+                        # fusion weights through loss-level reliability feedback
+                        # instead of directly changing the forward attention.
+                        fusion_module.set_adaptive_branch_bias(None, 0.0)
+                    elif adaptive_bias_state.get("target") in ("raw", "ae") and _is_structure_prior_source(adaptive_bias_state):
+                        fusion_module.set_adaptive_branch_bias(
+                            adaptive_bias_state.get("target"),
+                            _adaptive_branch_bias_cap(adaptive_bias_state, epoch, args)
+                        )
+                    elif not args.enable_runtime_adaptive_branch_bias:
+                        fusion_module.set_adaptive_branch_bias(None, 0.0)
             _, fusion_weights = fuse_dual_views(
                 hidden_emb_a,
                 hidden_emb_ae,
@@ -1192,15 +1638,13 @@ for run_idx in range(args.runs):
             w_a = fusion_mean[0]
             w_ae = fusion_mean[1]
             high_confidence_idx = _get_high_confidence_idx(dis, hc_ratio)
+            raw_reliability = None
+            ae_reliability = None
             if fusion_module is not None and args.enable_adaptive_branch_bias:
-                if adaptive_bias_state.get("target") in ("raw", "ae") and adaptive_bias_state.get("source") == "structure":
-                    fusion_module.set_adaptive_branch_bias(
-                        adaptive_bias_state.get("target"),
-                        _adaptive_branch_bias_cap(adaptive_bias_state, epoch, args)
-                    )
-                elif not args.enable_runtime_adaptive_branch_bias:
-                    fusion_module.set_adaptive_branch_bias(None, 0.0)
-                else:
+                if (
+                    not _is_structure_prior_source(adaptive_bias_state)
+                    and args.enable_runtime_adaptive_branch_bias
+                ):
                     raw_reliability = _compute_branch_reliability_score(
                         hidden_emb_a, predict_labels_t, high_confidence_idx, args.cluster_num
                     )
@@ -1211,6 +1655,37 @@ for run_idx in range(args.runs):
                         adaptive_bias_state, raw_reliability, ae_reliability, epoch, args
                     )
                     fusion_module.set_adaptive_branch_bias(adaptive_target, adaptive_cap)
+                    if adaptive_target in ("raw", "ae") and adaptive_cap > 0.0:
+                        _, fusion_weights = fuse_dual_views(
+                            hidden_emb_a,
+                            hidden_emb_ae,
+                            fusion_mode=args.fusion_mode,
+                            fusion_module=fusion_module,
+                            fixed_raw_weight=args.fixed_raw_weight,
+                        )
+                        fusion_mean = torch.mean(fusion_weights, dim=0)
+                        w_a = fusion_mean[0]
+                        w_ae = fusion_mean[1]
+            if (
+                fusion_module is not None
+                and args.enable_fusion_collapse_guard
+                and adaptive_bias_state.get("target") not in ("raw", "ae")
+            ):
+                guard_floor = _update_fusion_collapse_guard_state(
+                    collapse_guard_state, fusion_mean, epoch, args
+                )
+                if guard_floor > 0.0:
+                    fusion_module.set_collapse_guard(guard_floor)
+                    _, fusion_weights = fuse_dual_views(
+                        hidden_emb_a,
+                        hidden_emb_ae,
+                        fusion_mode=args.fusion_mode,
+                        fusion_module=fusion_module,
+                        fixed_raw_weight=args.fixed_raw_weight,
+                    )
+                    fusion_mean = torch.mean(fusion_weights, dim=0)
+                    w_a = fusion_mean[0]
+                    w_ae = fusion_mean[1]
 
             if epoch > args.warmup_epochs:
                 loss_a = _ccgc_confidence_loss(
@@ -1250,9 +1725,47 @@ for run_idx in range(args.runs):
                 clu_align = _cluster_distribution_align_loss(
                     hidden_emb_a, hidden_emb_ae, predict_labels_t, args.cluster_num, args.dist_tau, high_confidence_idx
                 )
-                loss = w_a * loss_a + w_ae * loss_ae + ramp * (
+                if args.enable_fusion_reliability_feedback_loss and args.fusion_mode == 'attn':
+                    if raw_reliability is None:
+                        raw_reliability = _compute_branch_reliability_score(
+                            hidden_emb_a, predict_labels_t, high_confidence_idx, args.cluster_num
+                        )
+                    if ae_reliability is None:
+                        ae_reliability = _compute_branch_reliability_score(
+                            hidden_emb_ae, predict_labels_t, high_confidence_idx, args.cluster_num
+                        )
+                if (
+                    args.enable_fusion_reliability_feedback_loss
+                    and args.fusion_feedback_detach_branch_loss
+                    and args.fusion_mode == 'attn'
+                ):
+                    branch_w_a = w_a.detach()
+                    branch_w_ae = w_ae.detach()
+                else:
+                    branch_w_a = w_a
+                    branch_w_ae = w_ae
+
+                loss = branch_w_a * loss_a + branch_w_ae * loss_ae + ramp * (
                     args.lambda_inst * inst_align + args.lambda_clu * clu_align
                 )
+                if (
+                    args.enable_fusion_reliability_feedback_loss
+                    and args.fusion_mode == 'attn'
+                ):
+                    feedback_loss, fusion_feedback_state = _fusion_reliability_feedback_loss(
+                        fusion_mean,
+                        adaptive_bias_state,
+                        raw_reliability,
+                        ae_reliability,
+                        args,
+                        branch_losses=(loss_a, loss_ae),
+                    )
+                    if feedback_loss is not None and args.fusion_feedback_weight > 0.0:
+                        feedback_ramp = min(
+                            1.0,
+                            float(epoch + 1) / max(1, args.fusion_feedback_warmup_ramp_epochs),
+                        )
+                        loss = loss + feedback_ramp * args.fusion_feedback_weight * feedback_loss
                 ### <--- [MODIFIED] ---------------------------------------
                 if args.enable_dcgl_cluster_level:
                     dcgl_clu_loss = _cluster_level_contrastive_loss(
@@ -1272,7 +1785,34 @@ for run_idx in range(args.runs):
             else:
                 S_a = z1_a @ z2_a.T
                 S_ae = z1_ae @ z2_ae.T
-                loss = w_a * F.mse_loss(S_a, target) + w_ae * F.mse_loss(S_ae, target)
+                recon_loss_a = F.mse_loss(S_a, target)
+                recon_loss_ae = F.mse_loss(S_ae, target)
+                if (
+                    args.enable_fusion_reliability_feedback_loss
+                    and args.fusion_feedback_detach_branch_loss
+                    and args.fusion_mode == 'attn'
+                ):
+                    branch_w_a = w_a.detach()
+                    branch_w_ae = w_ae.detach()
+                else:
+                    branch_w_a = w_a
+                    branch_w_ae = w_ae
+                loss = branch_w_a * recon_loss_a + branch_w_ae * recon_loss_ae
+                if args.enable_fusion_reliability_feedback_loss and args.fusion_mode == 'attn':
+                    feedback_loss, fusion_feedback_state = _fusion_reliability_feedback_loss(
+                        fusion_mean,
+                        adaptive_bias_state,
+                        None,
+                        None,
+                        args,
+                        branch_losses=(recon_loss_a, recon_loss_ae),
+                    )
+                    if feedback_loss is not None and args.fusion_feedback_weight > 0.0:
+                        warmup_ramp = min(
+                            1.0,
+                            float(epoch + 1) / max(1, args.fusion_feedback_warmup_ramp_epochs),
+                        )
+                        loss = loss + warmup_ramp * args.fusion_feedback_weight * feedback_loss
         else:
             ### <--- [MODIFIED] ---------------------------------------
             if args.enable_gcn_backbone:
@@ -1328,6 +1868,13 @@ for run_idx in range(args.runs):
                     fixed_raw_weight=args.fixed_raw_weight,
                 )
                 fusion_mean_eval = torch.mean(fusion_weights_eval, dim=0)
+                fusion_trace.append(
+                    (
+                        int(epoch),
+                        float(fusion_mean_eval[0].detach().cpu().item()),
+                        float(fusion_mean_eval[1].detach().cpu().item()),
+                    )
+                )
             else:
                 ### <--- [MODIFIED] ---------------------------------------
                 if args.enable_gcn_backbone:
@@ -1379,11 +1926,13 @@ for run_idx in range(args.runs):
                     best_fusion_export = last_fusion_export
             ### <--- [MODIFIED] ---------------------------------------
             if args.graph_mode == 'dual':
+                prior_label = str(adaptive_bias_state.get("target", "-")) if args.enable_adaptive_branch_bias else "-"
+                prior_key = "prior" if args.enable_fusion_reliability_feedback_loss else "bias"
                 pbar.set_postfix({
                     'Best ACC': f'{best_acc:.2f}',
                     'wA': f'{fusion_mean_eval[0].item():.2f}',
                     'wAE': f'{fusion_mean_eval[1].item():.2f}',
-                    'bias': str(adaptive_bias_state.get("target", "-")) if args.enable_adaptive_branch_bias else "-"
+                    prior_key: prior_label,
                 })
             else:
                 pbar.set_postfix({'Best ACC': f'{best_acc:.2f}'})
@@ -1397,11 +1946,85 @@ for run_idx in range(args.runs):
     ### <--- [MODIFIED] ---------------------------------------
     bias_text = ""
     if args.graph_mode == 'dual' and args.enable_adaptive_branch_bias:
-        bias_text = (
-            f" | Bias: {adaptive_bias_state.get('target', 'none')}"
-            f" | BiasMargin: {float(adaptive_bias_state.get('ema_margin', 0.0)):.4f}"
+        if args.enable_fusion_reliability_feedback_loss:
+            bias_text = f" | Prior: {adaptive_bias_state.get('target', 'none')}"
+        else:
+            bias_text = (
+                f" | Bias: {adaptive_bias_state.get('target', 'none')}"
+                f" | BiasMargin: {float(adaptive_bias_state.get('ema_margin', 0.0)):.4f}"
+            )
+    if args.graph_mode == 'dual' and args.enable_fusion_collapse_guard:
+        bias_text += (
+            f" | GuardFloor: {float(collapse_guard_state.get('floor', 0.0)):.4f}"
+            f" | GuardCount: {int(collapse_guard_state.get('candidate_count', 0))}"
         )
+    if (
+        args.graph_mode == 'dual'
+        and fusion_module is not None
+        and args.enable_adaptive_branch_bias
+    ):
+        adaptive_prior_state = fusion_module.adaptive_prior_state()
+        if adaptive_prior_state is not None:
+            bias_text += (
+                f" | PriorGate: {adaptive_prior_state.get('gate_mean', 0.0):.4f}"
+                f" | PriorGateStd: {adaptive_prior_state.get('gate_std', 0.0):.4f}"
+            )
+    if args.graph_mode == 'dual' and args.enable_fusion_reliability_feedback_loss and fusion_feedback_state is not None:
+        bias_text += (
+            f" | FB:{fusion_feedback_state.get('mode', '-')}/{fusion_feedback_state.get('source', '-')}"
+            f"({fusion_feedback_state.get('target_raw', 0.0):.3f},"
+            f"{fusion_feedback_state.get('target_ae', 0.0):.3f})"
+            f" | FBLoss:{fusion_feedback_state.get('loss', 0.0):.4f}"
+        )
+        if "coeff_raw" in fusion_feedback_state and "coeff_ae" in fusion_feedback_state:
+            bias_text += (
+                f" | FBCoeff:({fusion_feedback_state.get('coeff_raw', 0.0):.2f},"
+                f"{fusion_feedback_state.get('coeff_ae', 0.0):.2f})"
+                f" | FBWeakW:{fusion_feedback_state.get('weak_w', 0.0):.3f}"
+            )
+        if "collapse_gate" in fusion_feedback_state:
+            bias_text += (
+                f" | FBGate:{fusion_feedback_state.get('collapse_gate', 0.0):.3f}"
+                f"@{fusion_feedback_state.get('collapse_start', 0.0):.3f}"
+            )
+        if "adaptive_scale" in fusion_feedback_state:
+            bias_text += (
+                f" | FBScale:{fusion_feedback_state.get('adaptive_scale', 0.0):.2f}"
+                f"/Gap:{fusion_feedback_state.get('loss_gap', 0.0):.2f}"
+            )
+        if "branch_loss_raw" in fusion_feedback_state and "branch_loss_ae" in fusion_feedback_state:
+            bias_text += (
+                f" | BLoss:({fusion_feedback_state.get('branch_loss_raw', 0.0):.3f},"
+                f"{fusion_feedback_state.get('branch_loss_ae', 0.0):.3f})"
+            )
+        if "raw_rel" in fusion_feedback_state and "ae_rel" in fusion_feedback_state:
+            bias_text += (
+                f" | Rel:({fusion_feedback_state.get('raw_rel', 0.0):.3f},"
+                f"{fusion_feedback_state.get('ae_rel', 0.0):.3f})"
+            )
+    if (
+        args.graph_mode == 'dual'
+        and fusion_module is not None
+        and args.enable_learnable_boundary_gate
+    ):
+        boundary_state = fusion_module.boundary_gate_state()
+        if boundary_state is not None:
+            boundary_threshold, boundary_floor = boundary_state
+            bias_text += f" | BGateThr: {boundary_threshold:.4f} | BGateFloor: {boundary_floor:.4f}"
     tqdm.write(f"Run {run_idx+1:02d} Done | Seed: {seed} | ACC: {best_acc:.2f} | NMI: {best_nmi:.2f} | ARI: {best_ari:.2f} | F1: {best_f1:.2f}{bias_text}")
+    if args.graph_mode == 'dual' and fusion_trace:
+        trace_arr = np.asarray(fusion_trace, dtype=np.float32)
+        dominant = np.max(trace_arr[:, 1:3], axis=1)
+        tqdm.write(
+            "FusionPath "
+            f"| Seed: {seed} "
+            f"| first=({trace_arr[0, 1]:.3f},{trace_arr[0, 2]:.3f}) "
+            f"| mid=({trace_arr[len(trace_arr)//2, 1]:.3f},{trace_arr[len(trace_arr)//2, 2]:.3f}) "
+            f"| last=({trace_arr[-1, 1]:.3f},{trace_arr[-1, 2]:.3f}) "
+            f"| mean=({trace_arr[:, 1].mean():.3f},{trace_arr[:, 2].mean():.3f}) "
+            f"| max_dom={dominant.max():.3f} "
+            f"| end_dom={dominant[-1]:.3f}"
+        )
     ### ---------------------------------------
 
 acc_list = np.array(acc_list)

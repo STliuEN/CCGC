@@ -42,6 +42,12 @@ class Candidate:
     enable_dcgl: bool = True
 
 
+def gate_args(**values: Any) -> dict[str, Any]:
+    out = dict(values)
+    out["disable_dcgl_neg_reliability_gate"] = False
+    return out
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -257,13 +263,13 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
     common: list[Candidate] = [
         Candidate(
             "current_gate",
-            {
-                "dcgl_neg_tau": tau,
-                "dcgl_neg_weight": weight,
-                "dcgl_neg_gate_threshold": float(base.get("dcgl_neg_gate_threshold", 0.55)),
-                "dcgl_neg_gate_power": float(base.get("dcgl_neg_gate_power", 2.0)),
-                "dcgl_neg_gate_min": float(base.get("dcgl_neg_gate_min", 0.0)),
-            },
+            gate_args(
+                dcgl_neg_tau=tau,
+                dcgl_neg_weight=weight,
+                dcgl_neg_gate_threshold=float(base.get("dcgl_neg_gate_threshold", 0.55)),
+                dcgl_neg_gate_power=float(base.get("dcgl_neg_gate_power", 2.0)),
+                dcgl_neg_gate_min=float(base.get("dcgl_neg_gate_min", 0.0)),
+            ),
             "Current reliability-gated setting from experiment.py.",
         ),
         Candidate(
@@ -277,27 +283,27 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
         ),
         Candidate(
             "mild_w04_t065_p2",
-            {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.4, "dcgl_neg_gate_threshold": 0.65, "dcgl_neg_gate_power": 2.0, "dcgl_neg_gate_min": 0.0},
+            gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.4, dcgl_neg_gate_threshold=0.65, dcgl_neg_gate_power=2.0, dcgl_neg_gate_min=0.0),
             "More conservative gate and lower negative strength.",
         ),
         Candidate(
             "mild_w03_t065_p2",
-            {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.3, "dcgl_neg_gate_threshold": 0.65, "dcgl_neg_gate_power": 2.0, "dcgl_neg_gate_min": 0.0},
+            gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.3, dcgl_neg_gate_threshold=0.65, dcgl_neg_gate_power=2.0, dcgl_neg_gate_min=0.0),
             "Low-strength DCGL negative for datasets where DSAFC trails A-DSF.",
         ),
         Candidate(
             "late_w04_t075_p3",
-            {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.4, "dcgl_neg_gate_threshold": 0.75, "dcgl_neg_gate_power": 3.0, "dcgl_neg_gate_min": 0.0},
+            gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.4, dcgl_neg_gate_threshold=0.75, dcgl_neg_gate_power=3.0, dcgl_neg_gate_min=0.0),
             "Late activation to avoid unreliable pseudo-cluster separation.",
         ),
         Candidate(
             "late_w03_t075_p3",
-            {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.3, "dcgl_neg_gate_threshold": 0.75, "dcgl_neg_gate_power": 3.0, "dcgl_neg_gate_min": 0.0},
+            gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.3, dcgl_neg_gate_threshold=0.75, dcgl_neg_gate_power=3.0, dcgl_neg_gate_min=0.0),
             "Very conservative negative separation.",
         ),
         Candidate(
             "near_off_w02_t080_p3",
-            {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.2, "dcgl_neg_gate_threshold": 0.80, "dcgl_neg_gate_power": 3.0, "dcgl_neg_gate_min": 0.0},
+            gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.2, dcgl_neg_gate_threshold=0.80, dcgl_neg_gate_power=3.0, dcgl_neg_gate_min=0.0),
             "Near-off diagnostic; should approximate A-DSF while preserving the module path.",
         ),
     ]
@@ -307,12 +313,12 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
             [
                 Candidate(
                     "active_w06_t045_p15",
-                    {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.6, "dcgl_neg_gate_threshold": 0.45, "dcgl_neg_gate_power": 1.5, "dcgl_neg_gate_min": 0.0},
+                    gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.6, dcgl_neg_gate_threshold=0.45, dcgl_neg_gate_power=1.5, dcgl_neg_gate_min=0.0),
                     "Earlier activation for datasets where negative separation can help.",
                 ),
                 Candidate(
                     "active_w08_t055_p2",
-                    {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.8, "dcgl_neg_gate_threshold": 0.55, "dcgl_neg_gate_power": 2.0, "dcgl_neg_gate_min": 0.0},
+                    gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.8, dcgl_neg_gate_threshold=0.55, dcgl_neg_gate_power=2.0, dcgl_neg_gate_min=0.0),
                     "Higher strength check on datasets with positive DSAFC signal.",
                 ),
             ]
@@ -322,12 +328,12 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
             [
                 Candidate(
                     "ultra_late_w02_t085_p4",
-                    {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.2, "dcgl_neg_gate_threshold": 0.85, "dcgl_neg_gate_power": 4.0, "dcgl_neg_gate_min": 0.0},
+                    gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.2, dcgl_neg_gate_threshold=0.85, dcgl_neg_gate_power=4.0, dcgl_neg_gate_min=0.0),
                     "Almost disabled unless cluster reliability is very high.",
                 ),
                 Candidate(
                     "floor_w03_t075_p3_min005",
-                    {"dcgl_neg_tau": tau, "dcgl_neg_weight": 0.3, "dcgl_neg_gate_threshold": 0.75, "dcgl_neg_gate_power": 3.0, "dcgl_neg_gate_min": 0.05},
+                    gate_args(dcgl_neg_tau=tau, dcgl_neg_weight=0.3, dcgl_neg_gate_threshold=0.75, dcgl_neg_gate_power=3.0, dcgl_neg_gate_min=0.05),
                     "Small nonzero floor to avoid abrupt off/on behavior.",
                 ),
             ]
@@ -358,6 +364,24 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
         # EMA / branch bias left off. Each one gets its own same-center A-DSF
         # baseline via `baseline_name`.
         uat_centers = [
+            (
+                "uat_center_current_t6",
+                {"threshold": 0.4, "t": 6, "epochs": 500, "lr": 1.2e-4, "alpha": 0.45},
+                {"fusion_temp": 1.0, "fusion_balance": 0.35, "lambda_inst": 0.09, "lambda_clu": 0.09, "warmup_epochs": 35, "fusion_min_weight": 0.20},
+                "Current UAT t=6 center from the automatic structure-prior runner.",
+            ),
+            (
+                "uat_center_t6_temp12",
+                {"threshold": 0.4, "t": 6, "epochs": 500, "lr": 1.2e-4, "alpha": 0.45},
+                {"fusion_temp": 1.2, "fusion_balance": 0.32, "lambda_inst": 0.08, "lambda_clu": 0.08, "warmup_epochs": 35, "fusion_min_weight": 0.20},
+                "Slightly softer t=6 attention center to keep the learned raw preference without over-hardening it.",
+            ),
+            (
+                "uat_center_t6_highconf",
+                {"threshold": 0.45, "t": 6, "epochs": 500, "lr": 1.2e-4, "alpha": 0.45},
+                {"fusion_temp": 1.0, "fusion_balance": 0.35, "lambda_inst": 0.08, "lambda_clu": 0.075, "warmup_epochs": 45, "fusion_min_weight": 0.20},
+                "Higher-confidence t=6 center for reducing unstable pseudo-cluster negatives.",
+            ),
             (
                 "uat_center_default_strong_ari",
                 {"threshold": 0.4, "t": 5, "epochs": 500, "lr": 1.2e-4, "alpha": 0.45},
@@ -390,10 +414,10 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
             ),
         ]
         dcgl_variants = [
-            ("gate_w03_t065", {"dcgl_neg_tau": 0.5, "dcgl_neg_weight": 0.3, "dcgl_neg_gate_threshold": 0.65, "dcgl_neg_gate_power": 2.0, "dcgl_neg_gate_min": 0.0}),
+            ("gate_w03_t065", gate_args(dcgl_neg_tau=0.5, dcgl_neg_weight=0.3, dcgl_neg_gate_threshold=0.65, dcgl_neg_gate_power=2.0, dcgl_neg_gate_min=0.0)),
             ("legacy_w03", {"dcgl_neg_tau": 0.5, "dcgl_neg_weight": 0.3, "disable_dcgl_neg_reliability_gate": True}),
             ("legacy_w04", {"dcgl_neg_tau": 0.5, "dcgl_neg_weight": 0.4, "disable_dcgl_neg_reliability_gate": True}),
-            ("gate_w02_t080", {"dcgl_neg_tau": 0.5, "dcgl_neg_weight": 0.2, "dcgl_neg_gate_threshold": 0.80, "dcgl_neg_gate_power": 3.0, "dcgl_neg_gate_min": 0.0}),
+            ("gate_w02_t080", gate_args(dcgl_neg_tau=0.5, dcgl_neg_weight=0.2, dcgl_neg_gate_threshold=0.80, dcgl_neg_gate_power=3.0, dcgl_neg_gate_min=0.0)),
         ]
         extra: list[Candidate] = []
         for center_name, train_overrides, dual_overrides, center_note in uat_centers:
@@ -409,6 +433,72 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
                 )
             )
             for suffix, dcgl_overrides in dcgl_variants:
+                extra.append(
+                    Candidate(
+                        f"{center_name}_{suffix}",
+                        dcgl_overrides,
+                        center_note,
+                        train_args=train_overrides,
+                        dual_attn_args=dual_overrides,
+                        baseline_name=f"{center_name}_adsf",
+                    )
+                )
+        common.extend(extra)
+    if dataset == "usps":
+        usps_centers = [
+            (
+                "usps_current",
+                {"t": 6, "epochs": 400, "lr": 1e-4, "threshold": 0.4, "alpha": 0.5},
+                {"fusion_temp": 1.0, "fusion_balance": 0.30, "lambda_inst": 0.09, "lambda_clu": 0.09, "warmup_epochs": 35, "fusion_min_weight": 0.0},
+                "Current USPS center; checks whether the structure degradation prior can avoid over-trusting AE.",
+            ),
+            (
+                "usps_softer_balance",
+                {"t": 6, "epochs": 400, "lr": 1e-4, "threshold": 0.4, "alpha": 0.5},
+                {"fusion_temp": 1.3, "fusion_balance": 0.18, "lambda_inst": 0.08, "lambda_clu": 0.08, "warmup_epochs": 35, "fusion_min_weight": 0.0},
+                "Lower balance pressure with a softer attention temperature after structure self-correction.",
+            ),
+            (
+                "usps_feedback_controller",
+                {"t": 6, "epochs": 400, "lr": 1e-4, "threshold": 0.4, "alpha": 0.5},
+                {
+                    "fusion_temp": 1.2,
+                    "fusion_balance": 0.0,
+                    "lambda_inst": 0.08,
+                    "lambda_clu": 0.08,
+                    "warmup_epochs": 35,
+                    "fusion_min_weight": 0.0,
+                    "enable_fusion_reliability_feedback_loss": True,
+                    "fusion_feedback_loss_type": "controller",
+                    "fusion_feedback_weight": 0.6,
+                    "fusion_feedback_prior_strength": 1.2,
+                    "fusion_feedback_prior_blend": 0.75,
+                    "fusion_feedback_wrong_branch_margin": 0.55,
+                    "fusion_feedback_controller_base": 0.12,
+                    "fusion_feedback_controller_boost": 1.0,
+                },
+                "Loss-level reliability controller; keeps the forward attention unclamped while applying negative feedback near collapse.",
+            ),
+        ]
+        usps_dcgl_variants = [
+            ("legacy_w06", {"dcgl_neg_tau": 0.5, "dcgl_neg_weight": 0.6, "disable_dcgl_neg_reliability_gate": True}),
+            ("legacy_w04", {"dcgl_neg_tau": 0.5, "dcgl_neg_weight": 0.4, "disable_dcgl_neg_reliability_gate": True}),
+            ("gate_w03_t075", gate_args(dcgl_neg_tau=0.5, dcgl_neg_weight=0.3, dcgl_neg_gate_threshold=0.75, dcgl_neg_gate_power=3.0, dcgl_neg_gate_min=0.0)),
+        ]
+        extra = []
+        for center_name, train_overrides, dual_overrides, center_note in usps_centers:
+            extra.append(
+                Candidate(
+                    f"{center_name}_adsf",
+                    {},
+                    f"Same-center A-DSF baseline for {center_name}. {center_note}",
+                    train_args=train_overrides,
+                    dual_attn_args=dual_overrides,
+                    baseline_name=f"{center_name}_adsf",
+                    enable_dcgl=False,
+                )
+            )
+            for suffix, dcgl_overrides in usps_dcgl_variants:
                 extra.append(
                     Candidate(
                         f"{center_name}_{suffix}",

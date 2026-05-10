@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,6 +16,16 @@ class DualViewAttention(nn.Module):
         enable_branch_bias_fusion=False,
         branch_bias_target="raw",
         branch_bias_cap=0.2,
+        enable_learnable_boundary_gate=False,
+        boundary_gate_max_floor=0.20,
+        boundary_gate_init_floor=0.03,
+        boundary_gate_min_threshold=0.75,
+        boundary_gate_max_threshold=0.98,
+        boundary_gate_init_threshold=0.92,
+        boundary_gate_sharpness=30.0,
+        adaptive_bias_mode="cap",
+        adaptive_boundary_sharpness=24.0,
+        adaptive_boundary_tighten=0.0,
     ):
         super(DualViewAttention, self).__init__()
         self.temperature = max(1e-6, float(temperature))
@@ -29,6 +41,26 @@ class DualViewAttention(nn.Module):
         self.branch_bias_cap = min(0.49, max(0.0, float(branch_bias_cap)))
         self.adaptive_bias_target = None
         self.adaptive_bias_cap = 0.0
+        self.last_adaptive_prior_state = None
+        self.collapse_guard_floor = 0.0
+        self.enable_learnable_boundary_gate = bool(enable_learnable_boundary_gate)
+        self.boundary_gate_max_floor = min(0.49, max(0.0, float(boundary_gate_max_floor)))
+        self.boundary_gate_min_threshold = min(0.999, max(0.5, float(boundary_gate_min_threshold)))
+        self.boundary_gate_max_threshold = min(
+            0.999,
+            max(self.boundary_gate_min_threshold + 1e-6, float(boundary_gate_max_threshold)),
+        )
+        self.boundary_floor_logit = None
+        self.boundary_threshold_logit = None
+        self._boundary_gate_init_floor = float(boundary_gate_init_floor)
+        self._boundary_gate_init_threshold = float(boundary_gate_init_threshold)
+        self.boundary_gate_sharpness = max(1e-6, float(boundary_gate_sharpness))
+        if adaptive_bias_mode not in ("boundary", "cap"):
+            raise ValueError("adaptive_bias_mode must be either 'boundary' or 'cap'.")
+        self.adaptive_bias_mode = adaptive_bias_mode
+        self.adaptive_boundary_sharpness = max(1e-6, float(adaptive_boundary_sharpness))
+        self.adaptive_boundary_tighten = min(0.95, max(0.0, float(adaptive_boundary_tighten)))
+        self.adaptive_prior_gate = None
         ### ---------------------------------------
         # Reliability-aware attention:
         # enrich the logit input with directional discrepancy, shared content,
@@ -42,12 +74,36 @@ class DualViewAttention(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Linear(hidden_dim, 2),
         )
+        if self.adaptive_bias_mode == "boundary":
+            self.adaptive_prior_gate = nn.Sequential(
+                nn.Linear(10, max(8, hidden_dim // 4)),
+                nn.LeakyReLU(0.2),
+                nn.Linear(max(8, hidden_dim // 4), 1),
+            )
+            nn.init.zeros_(self.adaptive_prior_gate[-1].weight)
+            nn.init.constant_(self.adaptive_prior_gate[-1].bias, -1.10)
+        if self.enable_learnable_boundary_gate:
+            init_floor = min(self.boundary_gate_max_floor, max(0.0, self._boundary_gate_init_floor))
+            init_floor_ratio = init_floor / max(self.boundary_gate_max_floor, 1e-6)
+            init_floor_ratio = min(1.0 - 1e-6, max(1e-6, init_floor_ratio))
+            self.boundary_floor_logit = nn.Parameter(torch.logit(torch.tensor(init_floor_ratio, dtype=torch.float32)))
+            init_threshold = min(
+                self.boundary_gate_max_threshold,
+                max(self.boundary_gate_min_threshold, self._boundary_gate_init_threshold),
+            )
+            threshold_span = self.boundary_gate_max_threshold - self.boundary_gate_min_threshold
+            init_threshold_ratio = (init_threshold - self.boundary_gate_min_threshold) / max(threshold_span, 1e-6)
+            init_threshold_ratio = min(1.0 - 1e-6, max(1e-6, init_threshold_ratio))
+            self.boundary_threshold_logit = nn.Parameter(torch.logit(torch.tensor(init_threshold_ratio, dtype=torch.float32)))
 
     def set_adaptive_branch_bias(self, target=None, cap=0.0):
         if target not in (None, "raw", "ae"):
             raise ValueError("adaptive branch bias target must be None, 'raw', or 'ae'.")
         self.adaptive_bias_target = target
         self.adaptive_bias_cap = min(0.49, max(0.0, float(cap)))
+
+    def set_collapse_guard(self, floor=0.0):
+        self.collapse_guard_floor = min(0.49, max(0.0, float(floor)))
 
     def _apply_branch_bias_fusion(self, weights, target, cap):
         # Anchor one branch and only let the other branch act as a bounded
@@ -63,6 +119,118 @@ class DualViewAttention(nn.Module):
 
         beta = aux_floor + (cap - aux_floor) * weights[:, 0:1]
         return torch.cat([beta, 1.0 - beta], dim=1)
+
+    def _apply_learnable_boundary_gate(self, weights):
+        if (
+            not self.enable_learnable_boundary_gate
+            or self.boundary_gate_max_floor <= 0.0
+            or self.boundary_floor_logit is None
+            or self.boundary_threshold_logit is None
+        ):
+            return weights
+
+        floor = self.boundary_gate_max_floor * torch.sigmoid(self.boundary_floor_logit)
+        threshold_span = self.boundary_gate_max_threshold - self.boundary_gate_min_threshold
+        threshold = self.boundary_gate_min_threshold + threshold_span * torch.sigmoid(self.boundary_threshold_logit)
+        dominant = torch.max(weights, dim=1, keepdim=True).values
+        gate = torch.sigmoid((dominant - threshold) * self.boundary_gate_sharpness)
+        corrected = floor + (1.0 - 2.0 * floor) * weights
+        return (1.0 - gate) * weights + gate * corrected
+
+    def boundary_gate_state(self):
+        if (
+            not self.enable_learnable_boundary_gate
+            or self.boundary_floor_logit is None
+            or self.boundary_threshold_logit is None
+        ):
+            return None
+        with torch.no_grad():
+            floor = self.boundary_gate_max_floor * torch.sigmoid(self.boundary_floor_logit)
+            threshold_span = self.boundary_gate_max_threshold - self.boundary_gate_min_threshold
+            threshold = self.boundary_gate_min_threshold + threshold_span * torch.sigmoid(self.boundary_threshold_logit)
+        return float(threshold.detach().cpu().item()), float(floor.detach().cpu().item())
+
+    def _adaptive_prior_max_margin(self):
+        cap = min(0.49, max(1e-4, float(self.adaptive_bias_cap)))
+        # Preserve the old cap scale semantically: cap=0.10 corresponds to a
+        # maximum 90/10 prior margin, but the learned gate can reduce it to zero.
+        return float(math.log((1.0 - cap) / cap))
+
+    def _apply_adaptive_prior_logits(self, logits, reliability_feat):
+        if self.adaptive_bias_target not in ("raw", "ae") or self.adaptive_bias_cap <= 0.0:
+            self.last_adaptive_prior_state = None
+            return logits
+        if self.adaptive_bias_mode == "cap" or self.adaptive_prior_gate is None:
+            return logits
+
+        gate = torch.sigmoid(self.adaptive_prior_gate(reliability_feat))
+        half_margin = 0.5 * self._adaptive_prior_max_margin() * gate
+        if self.adaptive_bias_target == "raw":
+            offset = torch.cat([half_margin, -half_margin], dim=1)
+        else:
+            offset = torch.cat([-half_margin, half_margin], dim=1)
+        with torch.no_grad():
+            self.last_adaptive_prior_state = {
+                "target": self.adaptive_bias_target,
+                "gate_mean": float(gate.mean().detach().cpu().item()),
+                "gate_std": float(gate.std(unbiased=False).detach().cpu().item()),
+                "max_margin": self._adaptive_prior_max_margin(),
+            }
+        return logits + offset
+
+    def adaptive_prior_state(self):
+        return self.last_adaptive_prior_state
+
+    def _apply_adaptive_target_boundary(self, weights):
+        if self.adaptive_bias_target not in ("raw", "ae") or self.adaptive_bias_cap <= 0.0:
+            return weights
+        if self.adaptive_bias_mode != "boundary":
+            return weights
+
+        # The structure prior does not directly set the final weights. It only
+        # defines the reliable branch used when attention drifts across the
+        # opposite-side majority boundary.
+        wrong = weights[:, 1:2] if self.adaptive_bias_target == "raw" else weights[:, 0:1]
+        gate = torch.sigmoid((wrong - 0.5) * self.adaptive_boundary_sharpness)
+        cap = min(0.49, max(0.0, float(self.adaptive_bias_cap)))
+        # Once the wrong branch dominates, the correction should be stronger
+        # than the trigger boundary itself. The weak branch upper bound shrinks
+        # as the boundary evidence grows, while the inactive side remains nearly
+        # unchanged when gate is close to zero.
+        effective_cap = cap * (1.0 - self.adaptive_boundary_tighten * gate)
+        if self.adaptive_bias_target == "raw":
+            weak = effective_cap * weights[:, 1:2]
+            corrected = torch.cat([1.0 - weak, weak], dim=1)
+        else:
+            weak = effective_cap * weights[:, 0:1]
+            corrected = torch.cat([weak, 1.0 - weak], dim=1)
+        with torch.no_grad():
+            self.last_adaptive_prior_state = {
+                "target": self.adaptive_bias_target,
+                "gate_mean": float(gate.mean().detach().cpu().item()),
+                "gate_std": float(gate.std(unbiased=False).detach().cpu().item()),
+                "max_margin": self._adaptive_prior_max_margin(),
+            }
+        return (1.0 - gate) * weights + gate * corrected
+
+    def _apply_adaptive_cap_reparam(self, weights):
+        if self.adaptive_bias_mode != "cap":
+            return None
+        if self.adaptive_bias_target not in ("raw", "ae") or self.adaptive_bias_cap <= 0.0:
+            return None
+        corrected = self._apply_branch_bias_fusion(
+            weights,
+            self.adaptive_bias_target,
+            self.adaptive_bias_cap,
+        )
+        with torch.no_grad():
+            self.last_adaptive_prior_state = {
+                "target": self.adaptive_bias_target,
+                "gate_mean": 1.0,
+                "gate_std": 0.0,
+                "max_margin": self._adaptive_prior_max_margin(),
+            }
+        return corrected
 
     def forward(self, hidden_a, hidden_ae):
         raw_hidden_a = hidden_a
@@ -136,14 +304,23 @@ class DualViewAttention(nn.Module):
                 dim=1,
             )
         )
+        logits = self._apply_adaptive_prior_logits(logits, reliability_feat)
         weights = F.softmax(logits / self.temperature, dim=1)
-        if self.adaptive_bias_target is not None and self.adaptive_bias_cap > 0.0:
-            return self._apply_branch_bias_fusion(weights, self.adaptive_bias_target, self.adaptive_bias_cap)
+        adaptive_cap_weights = self._apply_adaptive_cap_reparam(weights)
+        if adaptive_cap_weights is not None:
+            return adaptive_cap_weights
+        weights = self._apply_adaptive_target_boundary(weights)
         if self.enable_branch_bias_fusion:
             return self._apply_branch_bias_fusion(weights, self.branch_bias_target, self.branch_bias_cap)
         ### <--- [MODIFIED] ---------------------------------------
+        if self.collapse_guard_floor > 0:
+            floor = self.collapse_guard_floor
+            weights = floor + (1.0 - 2.0 * floor) * weights
+            return weights
         if self.min_weight > 0:
             weights = self.min_weight + (1.0 - 2.0 * self.min_weight) * weights
+            return weights
+        weights = self._apply_learnable_boundary_gate(weights)
         ### ---------------------------------------
         return weights
 

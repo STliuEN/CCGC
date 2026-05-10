@@ -190,7 +190,7 @@ CONFIG = {
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.0,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -243,7 +243,7 @@ CONFIG = {
                 "lambda_inst": 0.06,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.15,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -321,7 +321,7 @@ CONFIG = {
                 "lambda_inst": 0.0,
                 "lambda_clu": 0.035,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -398,7 +398,7 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.8,
+                "fusion_temp": 2.2,
                 "fusion_balance": 0.15,
                 "lambda_inst": 0.045,
                 "lambda_clu": 0.02,
@@ -409,9 +409,10 @@ CONFIG = {
                 "adaptive_bias_start_epoch": -1,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
-                "adaptive_bias_cap": 0.10,
-                "adaptive_bias_ramp_epochs": 40,
+                "adaptive_bias_cap": 0.15,
+                "adaptive_bias_ramp_epochs": 1,
                 "adaptive_bias_ema": 0.90,
+                "adaptive_bias_mode": "cap",
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -458,24 +459,26 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1,
+                "fusion_temp": 1.3,
                 "fusion_balance": 0.0,
                 "lambda_inst": 0.03,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 70,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.0,
 
                 "enable_adaptive_branch_bias": True,
                 "adaptive_bias_start_epoch": -1,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
                 "adaptive_bias_cap": 0.10,
-                "adaptive_bias_ramp_epochs": 40,
+                "adaptive_bias_ramp_epochs": 1,
                 "adaptive_bias_ema": 0.90,
+                "adaptive_bias_mode": "cap",
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
+                "disable_dcgl_neg_reliability_gate": False,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -553,7 +556,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.05,
                 "warmup_epochs": 32,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.0,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -634,7 +637,7 @@ CONFIG = {
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.20,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -701,7 +704,7 @@ CONFIG = {
         "lambda_inst": 0.09,
         "lambda_clu": 0.09,
         "warmup_epochs": 35,
-        "fusion_min_weight": 0.10,
+        "fusion_min_weight": 0.0,
         "enable_adaptive_branch_bias": True,
         "adaptive_bias_start_epoch": -1,
         "adaptive_bias_margin": 0.10,
