@@ -127,7 +127,7 @@ CONFIG = {
                 "lambda_inst": 0.12,
                 "lambda_clu": 0.12,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
 
                 "enable_branch_bias_fusion": True,
                 "branch_bias_target": "raw",
@@ -160,7 +160,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.07,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
             },
         },
         "usps": {
@@ -190,7 +190,7 @@ CONFIG = {
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.0,
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -204,7 +204,7 @@ CONFIG = {
                 "dual_attn_args": {
                     "fusion_temp": [1.8, 2.0, 2.2],
                     "fusion_balance": [0.30, 0.35, 0.45],
-                    "fusion_min_weight": [0.15, 0.20, 0.25],
+                    "fusion_min_weight": [0.05],
                     "lambda_inst": [0.07, 0.09, 0.11],
                     "lambda_clu": [0.07, 0.09, 0.11],
                     "warmup_epochs": [25, 35, 45],
@@ -243,7 +243,7 @@ CONFIG = {
                 "lambda_inst": 0.06,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.15,
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -256,7 +256,7 @@ CONFIG = {
                 },
                 "dual_attn_args": {
                     "fusion_balance": [0.20, 0.25, 0.30],
-                    "fusion_min_weight": [0.10, 0.15, 0.20],
+                    "fusion_min_weight": [0.05],
                     "lambda_inst": [0.06, 0.08, 0.10],
                     "lambda_clu": [0.04, 0.06, 0.08],
                     "warmup_epochs": [25, 35, 45],
@@ -293,7 +293,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.06,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
             },
         },
         "amap": {
@@ -335,7 +335,7 @@ CONFIG = {
                 "dual_attn_args": {
                     "fusion_balance": [0.05, 0.08, 0.10],
                     "lambda_inst": [0.0, 0.03, 0.07],
-                    "fusion_min_weight": [0.0, 0.05, 0.10],
+                    "fusion_min_weight": [0.05],
                     "lambda_clu": [0.02, 0.035, 0.05],
                     "warmup_epochs": [25, 35, 45],
                 },
@@ -372,7 +372,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.04,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
             },
         },
         "cite": {
@@ -403,16 +403,7 @@ CONFIG = {
                 "lambda_inst": 0.045,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 55,
-                "fusion_min_weight": 0.10,
-
-                "enable_adaptive_branch_bias": True,
-                "adaptive_bias_start_epoch": -1,
-                "adaptive_bias_margin": 0.10,
-                "adaptive_bias_patience": 12,
-                "adaptive_bias_cap": 0.15,
-                "adaptive_bias_ramp_epochs": 1,
-                "adaptive_bias_ema": 0.90,
-                "adaptive_bias_mode": "cap",
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -426,12 +417,10 @@ CONFIG = {
                 "dual_attn_args": {
                     "fusion_temp": [1.6, 1.8, 2.0],
                     "fusion_balance": [0.10, 0.15, 0.25, 0.35],
-                    "fusion_min_weight": [0.05, 0.10, 0.15, 0.20],
+                    "fusion_min_weight": [0.05],
                     "lambda_inst": [0.03, 0.045, 0.06],
                     "lambda_clu": [0.01, 0.02, 0.03],
                     "warmup_epochs": [45, 55, 65],
-                    "adaptive_bias_margin": [0.08, 0.10, 0.12],
-                    "adaptive_bias_cap": [0.10, 0.15, 0.20],
                 },
                 "dcgl_negative_args": {
                     "dcgl_neg_tau": [0.35, 0.5, 0.75, 1.0],
@@ -462,18 +451,9 @@ CONFIG = {
                 "fusion_temp": 1.3,
                 "fusion_balance": 0.0,
                 "lambda_inst": 0.03,
-                "lambda_clu": 0.02,
+                "lambda_clu": 0.01,
                 "warmup_epochs": 70,
-                "fusion_min_weight": 0.0,
-
-                "enable_adaptive_branch_bias": True,
-                "adaptive_bias_start_epoch": -1,
-                "adaptive_bias_margin": 0.10,
-                "adaptive_bias_patience": 12,
-                "adaptive_bias_cap": 0.10,
-                "adaptive_bias_ramp_epochs": 1,
-                "adaptive_bias_ema": 0.90,
-                "adaptive_bias_mode": "cap",
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -486,12 +466,10 @@ CONFIG = {
                 },
                 "dual_attn_args": {
                     "fusion_balance": [0.0, 0.05, 0.10],
-                    "fusion_min_weight": [0.0, 0.05, 0.10],
+                    "fusion_min_weight": [0.05],
                     "lambda_inst": [0.02, 0.03, 0.04],
                     "lambda_clu": [0.005, 0.01, 0.02],
                     "warmup_epochs": [55, 70, 85],
-                    "adaptive_bias_margin": [0.08, 0.10, 0.12],
-                    "adaptive_bias_cap": [0.08, 0.10, 0.12],
                 },
                 "dcgl_negative_args": {
                     "dcgl_neg_tau": [0.35, 0.5, 0.75],
@@ -524,7 +502,7 @@ CONFIG = {
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
             },
         },
         "eat": {
@@ -556,7 +534,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.05,
                 "warmup_epochs": 32,
-                "fusion_min_weight": 0.0,
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -569,7 +547,7 @@ CONFIG = {
                 "dual_attn_args": {
                     "fusion_temp": [1.8, 2.0, 2.2],
                     "fusion_balance": [0.25, 0.35],
-                    "fusion_min_weight": [0.15, 0.20],
+                    "fusion_min_weight": [0.05],
                     "lambda_inst": [0.06, 0.08, 0.10],
                     "lambda_clu": [0.06, 0.08, 0.10],
                     "warmup_epochs": [25, 35, 45],
@@ -605,7 +583,7 @@ CONFIG = {
                 "lambda_inst": 0.08,
                 "lambda_clu": 0.06,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.10,
+                "fusion_min_weight": 0.05,
             },
         },
         "uat": {
@@ -637,7 +615,7 @@ CONFIG = {
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
-                "fusion_min_weight": 0.20,
+                "fusion_min_weight": 0.05,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -653,7 +631,7 @@ CONFIG = {
                     "fusion_balance": [0.30, 0.35, 0.40, 0.45],
                     "lambda_inst": [0.06, 0.08, 0.10],
                     "lambda_clu": [0.07, 0.075],
-                    "fusion_min_weight": [0.20, 0.22, 0.25],
+                    "fusion_min_weight": [0.05],
                     "warmup_epochs": [25, 35, 45],
                 },
                 "dcgl_negative_args": {
@@ -704,7 +682,7 @@ CONFIG = {
         "lambda_inst": 0.09,
         "lambda_clu": 0.09,
         "warmup_epochs": 35,
-        "fusion_min_weight": 0.0,
+        "fusion_min_weight": 0.05,
         "enable_adaptive_branch_bias": True,
         "adaptive_bias_start_epoch": -1,
         "adaptive_bias_margin": 0.10,
@@ -712,6 +690,7 @@ CONFIG = {
         "adaptive_bias_cap": 0.10,
         "adaptive_bias_ramp_epochs": 40,
         "adaptive_bias_ema": 0.90,
+        "adaptive_bias_mode": "cap",
         # Example:
         # "fusion_hidden": 128,
         # "fusion_temp": 1.0,

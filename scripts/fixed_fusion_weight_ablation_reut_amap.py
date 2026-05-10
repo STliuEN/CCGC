@@ -40,6 +40,20 @@ DATASET_LABELS = {
     "cite": "Citeseer",
 }
 DATASET_ORDER = ("reut", "uat", "amap", "usps", "cora", "cite")
+FIXED_INHERITED_DUAL_KEYS = ("warmup_epochs", "lambda_inst", "lambda_clu", "dist_tau")
+
+
+def default_weight_grid(step: float = 0.05) -> tuple[float, ...]:
+    step = float(step)
+    if step <= 0 or step > 1:
+        raise ValueError("--weight-step must be in (0, 1].")
+    values: list[float] = []
+    current = 0.0
+    while current < 1.0 - 1e-9:
+        values.append(round(current, 10))
+        current += step
+    values.append(1.0)
+    return tuple(dict.fromkeys(min(1.0, max(0.0, value)) for value in values))
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,7 +64,15 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--datasets", default="reut,uat,amap,usps,cora,cite")
-    parser.add_argument("--weights", default="0,0.1,0.25,0.5,0.75,0.9,1")
+    parser.add_argument(
+        "--weights",
+        default=None,
+        help=(
+            "Comma-separated raw-graph weights. If omitted, use 0.00..1.00 "
+            "with --weight-step."
+        ),
+    )
+    parser.add_argument("--weight-step", type=float, default=0.05, help="Default raw-weight grid step.")
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--device", default="cuda")
@@ -61,10 +83,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dcgl-mode",
         choices=("no_dcgl", "dcgl", "both"),
-        default="no_dcgl",
+        default="dcgl",
         help="no_dcgl isolates fusion; dcgl uses the final DSAFC negative term; both runs both sets.",
     )
     parser.add_argument("--no-dynamic", action="store_true", help="Only run fixed weights, without attention baselines.")
+    parser.add_argument("--no-plot", action="store_true", help="Do not render local diagnostic PNGs after the sweep.")
+    parser.add_argument("--update-summary-every", type=int, default=1, help="Rewrite summary.md every N finished jobs; 0 only writes at the end.")
     parser.add_argument("--update-raw-tables", action="store_true", help="Update docs/DSAFC_raw_tables.md Table 4-5a from this run.")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -91,7 +115,9 @@ def parse_datasets(raw: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(datasets))
 
 
-def parse_weights(raw: str) -> tuple[float, ...]:
+def parse_weights(raw: str | None, step: float) -> tuple[float, ...]:
+    if raw is None or not str(raw).strip():
+        return default_weight_grid(step)
     values: list[float] = []
     for token in str(raw).replace(";", ",").split(","):
         token = token.strip()
@@ -101,7 +127,7 @@ def parse_weights(raw: str) -> tuple[float, ...]:
         values.append(value)
     if not values:
         raise ValueError("No fixed weights were provided.")
-    return tuple(dict.fromkeys(values))
+    return tuple(dict.fromkeys(round(value, 10) for value in values))
 
 
 def merge_args(*arg_dicts: dict[str, Any]) -> dict[str, Any]:
@@ -150,6 +176,19 @@ def build_module_args(config: dict[str, Any], profile: dict[str, Any], *, enable
     return args
 
 
+def build_fixed_dual_train_args(config: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    """Keep fixed-fusion runs aligned with the current dual-attn training contract.
+
+    The fixed mode does not use attention temperature, branch floors, or adaptive
+    gates, but it should share the dataset-specific dual-view alignment horizon
+    and loss weights. Those values currently live in dual_attn_args.
+    """
+    merged = merge_args(config.get("dual_attn_args", {}), profile.get("dual_attn_args", {}))
+    fixed_args = {key: merged[key] for key in FIXED_INHERITED_DUAL_KEYS if key in merged}
+    fixed_args.update(config.get("dual_mean_args", {}))
+    return fixed_args
+
+
 def build_train_command(
     config: dict[str, Any],
     dataset: str,
@@ -193,7 +232,7 @@ def build_train_command(
     cmd.extend(dict_to_cli(config.get("dual_args", {})))
     if fusion_mode == "fixed":
         cmd.extend(["--fixed_raw_weight", f"{float(fixed_raw_weight):.6f}"])
-        cmd.extend(dict_to_cli(config.get("dual_mean_args", {})))
+        cmd.extend(dict_to_cli(build_fixed_dual_train_args(config, profile)))
     elif fusion_mode == "attn":
         cmd.extend(dict_to_cli(merge_args(config.get("dual_attn_args", {}), profile.get("dual_attn_args", {}))))
     else:
@@ -327,6 +366,7 @@ def write_summary(run_dir: Path, rows: list[dict[str, Any]], *, datasets: tuple[
         f"- Seeds: `{args.seed_start}..{args.seed_start + args.runs - 1}`",
         f"- DCGL mode: `{args.dcgl_mode}`",
         "- Current AE graph assets are reused from `data/ae_graph`.",
+        "- Fixed-weight runs inherit the current dataset-specific dual-view alignment settings from `experiment.py`.",
         "",
     ]
     for dataset in datasets:
@@ -593,7 +633,7 @@ def main() -> int:
     args = parse_args()
     config = load_experiment_config()
     datasets = parse_datasets(args.datasets)
-    weights = parse_weights(args.weights)
+    weights = parse_weights(args.weights, args.weight_step)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = args.run_dir or (OUTPUT_ROOT / f"{stamp}_{'_'.join(datasets)}_fixed_weight")
     run_dir = run_dir.resolve()
@@ -602,6 +642,8 @@ def main() -> int:
     resume_rows = load_resume(results_jsonl) if args.resume else {}
 
     rows: list[dict[str, Any]] = list(resume_rows.values())
+    update_every = max(0, int(args.update_summary_every))
+    completed_since_summary = 0
     for dataset in datasets:
         for enable_dcgl in dcgl_enabled_values(args.dcgl_mode):
             dcgl_tag = "dcgl" if enable_dcgl else "no_dcgl"
@@ -651,7 +693,11 @@ def main() -> int:
                 }
                 append_jsonl(results_jsonl, row)
                 rows.append(row)
+                completed_since_summary += 1
                 print(f"[{row['status'].upper()}] {dataset}/{key} score={row['score']:.2f}", flush=True)
+                if update_every and completed_since_summary >= update_every:
+                    write_summary(run_dir, rows, datasets=datasets, weights=weights, args=args)
+                    completed_since_summary = 0
 
             if args.no_dynamic:
                 continue
@@ -701,20 +747,27 @@ def main() -> int:
             }
             append_jsonl(results_jsonl, row)
             rows.append(row)
+            completed_since_summary += 1
             print(f"[{row['status'].upper()}] {dataset}/{key} score={row['score']:.2f}", flush=True)
+            if update_every and completed_since_summary >= update_every:
+                write_summary(run_dir, rows, datasets=datasets, weights=weights, args=args)
+                completed_since_summary = 0
 
     write_summary(run_dir, rows, datasets=datasets, weights=weights, args=args)
     if not args.dry_run:
-        maybe_plot(run_dir, rows, datasets)
+        if not args.no_plot:
+            maybe_plot(run_dir, rows, datasets)
         if args.update_raw_tables:
             update_raw_tables(RAW_TABLES, run_dir, rows)
     manifest = {
         "generated_at": datetime.now().isoformat(),
         "datasets": list(datasets),
         "weights": list(weights),
+        "weight_step": args.weight_step,
         "runs": args.runs,
         "seed_start": args.seed_start,
         "dcgl_mode": args.dcgl_mode,
+        "fixed_inherited_dual_keys": list(FIXED_INHERITED_DUAL_KEYS),
         "results_jsonl": str(results_jsonl),
         "summary": str(run_dir / "summary.md"),
     }

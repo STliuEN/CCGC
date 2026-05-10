@@ -44,6 +44,7 @@ PARAM_LABELS = {
     "fusion_temp": "fusion temperature",
     "lambda_inst": "lambda_inst",
     "lambda_clu": "lambda_clu",
+    "warmup_epochs": "warmup epochs",
 }
 DEFAULT_VALUES = {
     "t": (1, 2, 3, 4, 5, 6),
@@ -51,6 +52,7 @@ DEFAULT_VALUES = {
     "fusion_temp": (1.0, 1.3, 1.6, 1.9, 2.2),
     "lambda_inst": (0.0, 0.03, 0.06, 0.09, 0.12),
     "lambda_clu": (0.0, 0.02, 0.04, 0.06, 0.08),
+    "warmup_epochs": (25, 35, 45, 55, 70, 85),
 }
 RESOURCE_LABEL_TO_KEY = {
     "Wall time (sec)": "wall_time_sec",
@@ -88,7 +90,7 @@ def parse_args() -> argparse.Namespace:
         default="fusion_temp,lambda_inst,lambda_clu",
         help=(
             "Comma-separated parameters to sweep. Supported: t, fusion_temp, "
-            "lambda_inst, lambda_clu, k_E. Use --include-ke to append k_E."
+            "lambda_inst, lambda_clu, warmup_epochs, k_E. Use --include-ke to append k_E."
         ),
     )
     parser.add_argument(
@@ -156,6 +158,9 @@ def parse_param_list(raw: str, include_ke: bool) -> tuple[str, ...]:
         "tau_f": "fusion_temp",
         "lambda_inst": "lambda_inst",
         "lambda_clu": "lambda_clu",
+        "warmup": "warmup_epochs",
+        "warmup_epoch": "warmup_epochs",
+        "warmup_epochs": "warmup_epochs",
     }
     params: list[str] = []
     for token in str(raw).replace(";", ",").split(","):
@@ -196,7 +201,7 @@ def parse_value_overrides(raw_values: list[str]) -> dict[str, tuple[float | int,
             token = token.strip()
             if not token:
                 continue
-            if key in {"k_E", "t"}:
+            if key in {"k_E", "t", "warmup_epochs"}:
                 parsed.append(int(float(token)))
             else:
                 parsed.append(float(token))
