@@ -277,7 +277,7 @@ def candidates_for_dataset(config: dict[str, Any], dataset: str) -> list[Candida
             {
                 "dcgl_neg_tau": tau,
                 "dcgl_neg_weight": weight,
-                "disable_dcgl_neg_reliability_gate": True,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "Previous conservative row-weighted DCGL negative; useful for checking whether the new gate introduced regressions.",
         ),

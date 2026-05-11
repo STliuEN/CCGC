@@ -4166,7 +4166,7 @@ def eat_attn_apex_candidates() -> list[Candidate]:
         "fusion_hidden": 64,
         "fusion_temp": 1.6,
         "fusion_balance": 0.20,
-        "fusion_min_weight": 0.005,
+        "fusion_min_weight": 0.055,
         "lambda_inst": 0.08,
         "lambda_clu": 0.05,
         "warmup_epochs": 32,

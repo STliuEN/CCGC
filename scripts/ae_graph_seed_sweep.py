@@ -126,6 +126,14 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Rewrite summary.md after every N completed jobs. 0 writes only at the end.",
     )
+    parser.add_argument("--score-acc-weight", type=float, default=1.0)
+    parser.add_argument("--score-nmi-weight", type=float, default=0.2)
+    parser.add_argument("--score-ari-weight", type=float, default=0.2)
+    parser.add_argument("--score-f1-weight", type=float, default=0.4)
+    parser.add_argument("--score-acc-std-penalty", type=float, default=0.25)
+    parser.add_argument("--score-f1-std-penalty", type=float, default=0.25)
+    parser.add_argument("--score-nmi-std-penalty", type=float, default=0.0)
+    parser.add_argument("--score-ari-std-penalty", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -391,15 +399,36 @@ def parse_metrics(text: str) -> dict[str, dict[str, float]]:
     return metrics
 
 
-def score_metrics(metrics: dict[str, dict[str, float]]) -> float:
+def score_formula(args: argparse.Namespace) -> str:
+    terms = [
+        (float(args.score_acc_weight), "ACC"),
+        (float(args.score_nmi_weight), "NMI"),
+        (float(args.score_ari_weight), "ARI"),
+        (float(args.score_f1_weight), "F1"),
+    ]
+    penalties = [
+        (float(args.score_acc_std_penalty), "ACC_std"),
+        (float(args.score_nmi_std_penalty), "NMI_std"),
+        (float(args.score_ari_std_penalty), "ARI_std"),
+        (float(args.score_f1_std_penalty), "F1_std"),
+    ]
+    pieces = [f"{weight:g}*{name}" for weight, name in terms if weight]
+    pieces.extend(f"- {weight:g}*{name}" for weight, name in penalties if weight)
+    return " + ".join(pieces).replace("+ -", "-")
+
+
+def score_metrics(metrics: dict[str, dict[str, float]], args: argparse.Namespace) -> float:
     if not all(metric in metrics for metric in METRICS):
         return float("-inf")
     return (
-        metrics["ACC"]["mean"]
-        + 0.4 * metrics["F1"]["mean"]
-        + 0.2 * metrics["NMI"]["mean"]
-        + 0.2 * metrics["ARI"]["mean"]
-        - 0.25 * (metrics["ACC"]["std"] + metrics["F1"]["std"])
+        float(args.score_acc_weight) * metrics["ACC"]["mean"]
+        + float(args.score_nmi_weight) * metrics["NMI"]["mean"]
+        + float(args.score_ari_weight) * metrics["ARI"]["mean"]
+        + float(args.score_f1_weight) * metrics["F1"]["mean"]
+        - float(args.score_acc_std_penalty) * metrics["ACC"]["std"]
+        - float(args.score_nmi_std_penalty) * metrics["NMI"]["std"]
+        - float(args.score_ari_std_penalty) * metrics["ARI"]["std"]
+        - float(args.score_f1_std_penalty) * metrics["F1"]["std"]
     )
 
 
@@ -474,7 +503,7 @@ def write_summary(out_dir: Path, results: list[dict[str, Any]], args: argparse.N
         f"- Main train seeds: {args.seed_start}..{args.seed_start + args.runs - 1}",
         f"- Runs per AE asset: {args.runs}",
         f"- Stop-on-main-table-pass: {'ON' if args.stop_on_main_table_pass else 'OFF'}",
-        f"- Selection score: ACC + 0.4*F1 + 0.2*NMI + 0.2*ARI - 0.25*(ACC_std + F1_std)",
+        f"- Selection score: {score_formula(args)}",
         f"- Results jsonl: {str((out_dir / 'results.jsonl').relative_to(ROOT))}",
         "",
     ]
@@ -602,7 +631,7 @@ def run_job(
             "train_elapsed": elapsed,
             "train_timed_out": timed_out,
             "metrics": metrics,
-            "score": score_metrics(metrics),
+            "score": score_metrics(metrics, args),
             "main_table_target": target,
             "main_table_gaps": metric_gaps(metrics, target) if metrics and target else {},
             "passed_main_table_target": passed_target,
@@ -642,6 +671,7 @@ def main() -> None:
         "python": str(args.python),
         "device": args.device,
         "stop_on_main_table_pass": bool(args.stop_on_main_table_pass),
+        "score_formula": score_formula(args),
         "main_table_targets": {dataset: target_for_dataset(dataset) for dataset in datasets if target_for_dataset(dataset)},
         "note": "Isolated AE graph assets. Main training uses fixed train seeds for all AE assets.",
     }

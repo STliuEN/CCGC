@@ -30,7 +30,7 @@ CONFIG = {
     # Example: ["acm"], ["usps"], ["acm", "usps"], ["acm","dblp","usps","reut","hhar","amap", "bat", "cite", "cora", "eat", "pubmed", "uat"]，corafull is too slow for quick tests, so it's not in the default list.
     #["reut", "uat", "amap", "usps", "cora", "cite"],
 
-    "active_datasets": [ "amap"],
+    "active_datasets": [ "reut", "uat", "amap", "usps", "cora", "cite" ],
 
     # 2) Compare modes: baseline / ae / dual(shared A+AE)
     "run_baseline": False,
@@ -67,7 +67,7 @@ CONFIG = {
         "dcgl_neg_weight": 0.6,
         # Keep the DCGL-negative reliability path unified across datasets.
         # True uses the earlier row-weighted DCGL-negative frontier.
-        "disable_dcgl_neg_reliability_gate": True,
+        "disable_dcgl_neg_reliability_gate":True,
         "dcgl_neg_gate_threshold": 0.55,
         "dcgl_neg_gate_power": 2.0,
         "dcgl_neg_gate_min": 0.0,
@@ -192,28 +192,45 @@ CONFIG = {
             "dual_attn_args": {
                 "fusion_hidden": 64,
                 "fusion_temp": 1,
-                "fusion_balance": 0.3,
+                "fusion_balance": 0.30,
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
+                "enable_adaptive_branch_bias": True,
+                "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_margin": 0.10,
+                "adaptive_bias_patience": 12,
+                "adaptive_bias_cap": 0.12,
+                "adaptive_bias_ramp_epochs": 5,
+                "adaptive_bias_ema": 0.90,
+                "adaptive_bias_mode": "cap",
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
-                "disable_dcgl_neg_reliability_gate": True,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "safe_tuning_grid": {
                 "train_args": {
                     "threshold": [0.35, 0.4, 0.45],
                 },
                 "dual_attn_args": {
-                    "fusion_temp": [1.8, 2.0, 2.2],
-                    "fusion_balance": [0.30, 0.35, 0.45],
+                    # USPS fine-grained corridor around the current compact-table center.
+                    # The runtime adaptive bias knobs only matter if the runtime path is
+                    # explicitly enabled; under the current structure-prior path they stay
+                    # mostly dormant, so keep them narrow and focused.
+                    "fusion_temp": [1.0, 1.3],
+                    "fusion_balance": [0.25, 0.30, 0.35],
                     "fusion_min_weight": [0.05],
                     "lambda_inst": [0.07, 0.09, 0.11],
                     "lambda_clu": [0.07, 0.09, 0.11],
-                    "warmup_epochs": [25, 35, 45],
+                    "warmup_epochs": [30, 35, 40],
+                    "adaptive_bias_cap": [0.11, 0.12, 0.13],
+                    "adaptive_bias_margin": [0.05, 0.10, 0.15],
+                    "adaptive_bias_patience": [8, 12, 16],
+                    "adaptive_bias_ema": [0.85, 0.90, 0.95],
+                    "adaptive_bias_ramp_epochs": [3, 5, 8],
                 },
                 "dcgl_negative_args": {
                     "dcgl_neg_tau": [0.5, 0.75, 1.0],
@@ -227,6 +244,7 @@ CONFIG = {
                 ### <--- [MODIFIED] ---------------------------------------
                 # Main training suggestion: high-dimensional text data is more stable with a smaller lr.
                 "lr": 1e-4,
+                "t": 5,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -245,22 +263,25 @@ CONFIG = {
             "dual_attn_args": {
                 "fusion_hidden": 64,
                 "fusion_temp": 1.6,
-                "fusion_balance": 0.25,
+                "fusion_balance": 0.30,
                 "lambda_inst": 0.06,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
                 "enable_runtime_adaptive_branch_bias": True,
-                "adaptive_bias_cap": 0.20,
+                # Keep Reuters on the AE-dominant side. cap < 0.5 guarantees
+                # wAE > wA after the runtime reliability correction triggers.
+                "adaptive_bias_cap": 0.22,
                 "adaptive_bias_margin": 0.0,
                 "adaptive_bias_patience": 1,
                 "adaptive_bias_ema": 0.50,
                 "adaptive_bias_ramp_epochs": 5,
+                "adaptive_bias_mode": "cap",
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.3,
-                "disable_dcgl_neg_reliability_gate": True,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -343,7 +364,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.49,
-                "disable_dcgl_neg_reliability_gate": True,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -430,7 +451,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
-                "disable_dcgl_neg_reliability_gate": True,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -456,6 +477,9 @@ CONFIG = {
                 ### <--- [MODIFIED] ---------------------------------------
                 # CCGC original dataset: keep the paper-aligned main-train lr.
                 "lr": 1e-4,
+                "dims": 768,
+                "t": 5,
+                "threshold": 0.40,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -470,12 +494,14 @@ CONFIG = {
             },
             "dual_attn_args": {
                 "fusion_hidden": 64,
-                "fusion_temp": 1.3,
+                "fusion_temp": 1.36,
                 "fusion_balance": 0.0,
                 "lambda_inst": 0.03,
                 "lambda_clu": 0.01,
                 "warmup_epochs": 70,
                 "fusion_min_weight": 0.05,
+                "enable_adaptive_branch_bias": True,
+                "adaptive_bias_mode": "cap",
                 "adaptive_bias_cap": 0.08,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
@@ -485,7 +511,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
-                "disable_dcgl_neg_reliability_gate": False,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -661,7 +687,7 @@ CONFIG = {
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.75,
                 "dcgl_neg_weight": 0.6,
-                "disable_dcgl_neg_reliability_gate": True,
+                "disable_dcgl_neg_reliability_gate":True,
             },
             "safe_tuning_grid": {
                 "train_args": {
