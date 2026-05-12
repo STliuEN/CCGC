@@ -11,6 +11,10 @@ if str(ROOT) not in sys.path:
 from scripts.render_dsafc_main_results_with_std import build_display_rows_with_local_marks
 from scripts.render_dsafc_paper_figures import (
     ASSETS,
+    ARCHIVED_DATASET_LABELS,
+    ARCHIVED_METHODS,
+    build_rank_summary_rows,
+    filter_active_table,
     load_markdown_table,
     mark_local_reproduction_cells,
     ours_highlight_columns,
@@ -25,9 +29,11 @@ COMPACT_MAIN_SECTION = "Table 4-2 Compact Main Clustering Results"
 COMPACT_STD_SECTION = "Table 4-2 Compact Main Results With Std"
 MAIN_OUTPUT = ASSETS / "DSAFC_main_results_compact.png"
 STD_OUTPUT = ASSETS / "DSAFC_main_results_with_std_compact.png"
+RANK_SUMMARY_OUTPUT = ASSETS / "DSAFC_kbs_rank_summary.png"
+PROTOCOL_OUTPUT = ASSETS / "DSAFC_kbs_baseline_protocol.png"
 
-DROP_DATASETS = {"EAT"}
-DROP_METHODS = {"SCGC-N", "SCGC-N*"}
+DROP_DATASETS = ARCHIVED_DATASET_LABELS
+DROP_METHODS = ARCHIVED_METHODS
 
 COMPACT_NOTE = (
     "This compact display-only variant removes dataset `EAT` and drops "
@@ -37,15 +43,7 @@ COMPACT_NOTE = (
 
 
 def _filter_table(columns: list[str], rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
-    keep_indices = [
-        idx
-        for idx, col in enumerate(columns)
-        if idx < 2 or col not in DROP_METHODS
-    ]
-    filtered_columns = [columns[idx] for idx in keep_indices]
-    filtered_rows = [row for row in rows if row[0] not in DROP_DATASETS]
-    filtered_rows = [[row[idx] for idx in keep_indices] for row in filtered_rows]
-    return filtered_columns, filtered_rows
+    return filter_active_table(columns, rows, drop_methods=DROP_METHODS, group_col=0)
 
 
 def _sparsify_group_col(rows: list[list[str]], group_col: int = 0) -> list[list[str]]:
@@ -163,8 +161,42 @@ def main() -> None:
         numeric_start_col=2,
     )
 
+    rank_rows = build_rank_summary_rows(columns_full, rows_full)
+    render_table(
+        RANK_SUMMARY_OUTPUT,
+        ["Method", "Avg. rank", "Ours W/T/L"],
+        rank_rows,
+        highlight_col_fills={0: "#f5f9ff"},
+        col_widths=[1.7, 1.15, 1.35],
+        wrap_widths=[16, 10, 10],
+        fig_width=6.4,
+        font_size=12.5,
+        header_size=13.8,
+        row_unit=0.38,
+        vertical_after=(0,),
+        numeric_start_col=1,
+    )
+
+    protocol_columns, protocol_rows = load_markdown_table("Table 4-2a Baseline Protocol Summary")
+    render_table(
+        PROTOCOL_OUTPUT,
+        protocol_columns,
+        protocol_rows,
+        col_widths=[1.9, 1.0, 1.12, 1.1, 1.16, 1.1, 3.25],
+        wrap_widths=[18, 10, 12, 13, 14, 12, 37],
+        fig_width=17.0,
+        font_size=10.6,
+        header_size=11.5,
+        row_unit=0.58,
+        header_unit=0.72,
+        vertical_after=(0, 5),
+        col_aligns=["left", "center", "center", "center", "center", "center", "left"],
+    )
+
     print(MAIN_OUTPUT)
     print(STD_OUTPUT)
+    print(RANK_SUMMARY_OUTPUT)
+    print(PROTOCOL_OUTPUT)
 
 
 if __name__ == "__main__":

@@ -1202,6 +1202,8 @@ parser.add_argument('--graph_mode', type=str, default='raw', choices=['raw', 'kn
                     help="graph source for project datasets: 'raw' (prefer npy/original graph, fallback to knn), 'knn', 'ae', or dual-view 'dual'")
 parser.add_argument('--ae_graph_path', type=str, default='',
                     help='path to Ae edge-list file, used when --graph_mode ae')
+parser.add_argument('--raw_graph_path', type=str, default='',
+                    help='optional raw/original edge-list override for structural-uncertainty experiments')
 parser.add_argument('--knn_k', type=int, default=5,
                     help='k for KNN graph construction when --graph_mode knn or when raw graph fallback is needed')
 parser.add_argument('--warmup_epochs', type=int, default=50,
@@ -1446,7 +1448,8 @@ if args.graph_mode == 'dual':
         args.dataset,
         graph_mode='raw',
         ae_graph_path=args.ae_graph_path,
-        knn_k=args.knn_k
+        knn_k=args.knn_k,
+        raw_graph_path=args.raw_graph_path,
     )
     # View-2: corrected graph AE
     adj_ae, features_ae, true_labels_ae, _, _, _ = load_data(
@@ -1490,7 +1493,8 @@ else:
         args.dataset,
         graph_mode=args.graph_mode,
         ae_graph_path=args.ae_graph_path,
-        knn_k=args.knn_k
+        knn_k=args.knn_k,
+        raw_graph_path=args.raw_graph_path,
     )
     smooth_fea = _smooth_with_adj(adj, features, args.t, args.device)
     adaptive_structure_prior = None
@@ -1897,6 +1901,7 @@ for run_idx in range(args.runs):
                     "labels": np.asarray(true_labels, dtype=np.int64),
                     "pred": np.asarray(predict_labels, dtype=np.int64),
                     "metrics": np.asarray([acc, nmi, ari, f1], dtype=np.float32) / 100.0,
+                    "fusion_trace": np.asarray(fusion_trace, dtype=np.float32),
                     "graph_mode": np.asarray(args.graph_mode),
                     "fusion_mode": np.asarray(args.fusion_mode),
                     "adaptive_bias_target": np.asarray(str(adaptive_bias_state.get("target", "none"))),
@@ -2094,6 +2099,7 @@ if args.save_fusion_weights_path and args.graph_mode == 'dual':
         labels=best_fusion_export["labels"],
         pred=best_fusion_export["pred"],
         metrics=best_fusion_export["metrics"],
+        fusion_trace=best_fusion_export.get("fusion_trace", np.empty((0, 3), dtype=np.float32)).astype(np.float32),
         dataset=np.asarray(args.dataset),
         seed=np.asarray(best_fusion_export["seed"], dtype=np.int64),
         epoch=np.asarray(best_fusion_export["epoch"], dtype=np.int64),

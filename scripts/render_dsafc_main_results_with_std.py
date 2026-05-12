@@ -20,6 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from scripts.render_dsafc_paper_figures import (
+    ARCHIVED_METHODS,
     FONT_SCALE,
     GROUP_GAP_RATIO,
     GROUP_LABEL_Y_OFFSET,
@@ -29,6 +30,7 @@ from scripts.render_dsafc_paper_figures import (
     _parse_float,
     _wrap,
     collect_rank_styles,
+    filter_active_table,
     load_markdown_table,
     load_local_reproduction_pairs,
     ours_highlight_columns,
@@ -527,7 +529,7 @@ def render_table_with_display_rows(
             if bold_last_col and c_idx == n_cols - 1:
                 weight = "bold"
             if (r_idx, c_idx) in bold_cells:
-                weight = "bold"
+                weight = "heavy"
             ha = col_aligns[c_idx]
             if ha == "left":
                 x = x_edges[c_idx] + 0.012
@@ -557,7 +559,7 @@ def render_table_with_display_rows(
                     x0 = x_centers[c_idx] - cell_width * 0.23
                     x1 = x_centers[c_idx] + cell_width * 0.23
                 y_line = y_mid - row_heights[r_idx] * 0.18
-                ax.plot([x0, x1], [y_line, y_line], color="black", lw=1.05, solid_capstyle="butt")
+                ax.plot([x0, x1], [y_line, y_line], color="black", lw=1.35, solid_capstyle="butt")
 
     for label, start, end in group_spans:
         c_idx = group_col
@@ -588,6 +590,7 @@ def render_table_with_display_rows(
 
 def main() -> None:
     columns, base_rows = load_markdown_table("Table 4-2 Main Clustering Results", group_col=0)
+    columns, base_rows = filter_active_table(columns, base_rows, drop_methods=ARCHIVED_METHODS, group_col=0)
     columns, base_rows = reorder_main_table_columns(columns, base_rows)
     display_rows = build_display_rows_with_local_marks(columns, base_rows)
     render_table_with_display_rows(

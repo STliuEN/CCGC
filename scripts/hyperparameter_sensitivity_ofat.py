@@ -41,15 +41,17 @@ DATASET_LABELS = {
 PARAM_LABELS = {
     "t": "propagation depth t",
     "k_E": "refined graph k_E",
-    "fusion_temp": "fusion temperature",
+    "fusion_temp": "fusion temperature tau_f",
+    "dcgl_neg_weight": "cluster-separation strength lambda_sep",
     "lambda_inst": "lambda_inst",
     "lambda_clu": "lambda_clu",
     "warmup_epochs": "warmup epochs",
 }
 DEFAULT_VALUES = {
     "t": (1, 2, 3, 4, 5, 6),
-    "k_E": (5, 10, 15, 20, 25),
+    "k_E": (5, 10, 15, 20, 25, 30),
     "fusion_temp": (1.0, 1.3, 1.6, 1.9, 2.2),
+    "dcgl_neg_weight": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
     "lambda_inst": (0.0, 0.03, 0.06, 0.09, 0.12),
     "lambda_clu": (0.0, 0.02, 0.04, 0.06, 0.08),
     "warmup_epochs": (25, 35, 45, 55, 70, 85),
@@ -75,7 +77,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Run one-factor-at-a-time hyperparameter sensitivity for the final "
             "DSAFC dual-attention setting. By default this reuses current AE "
-            "graph assets and varies only fusion_temp/lambda_inst/lambda_clu."
+            "graph assets and varies t/k_E/fusion_temp/lambda_sep."
         )
     )
     parser.add_argument(
@@ -87,10 +89,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--params",
-        default="fusion_temp,lambda_inst,lambda_clu",
+        default="t,k_E,dcgl_neg_weight,fusion_temp",
         help=(
-            "Comma-separated parameters to sweep. Supported: t, fusion_temp, "
-            "lambda_inst, lambda_clu, warmup_epochs, k_E. Use --include-ke to append k_E."
+            "Comma-separated parameters to sweep. Supported: t, k_E, fusion_temp, "
+            "dcgl_neg_weight, lambda_inst, lambda_clu, warmup_epochs. "
+            "The code name dcgl_neg_weight is reported as lambda_sep in tables."
         ),
     )
     parser.add_argument(
@@ -155,7 +158,15 @@ def parse_param_list(raw: str, include_ke: bool) -> tuple[str, ...]:
         "smooth_t": "t",
         "t": "t",
         "fusion_temp": "fusion_temp",
+        "tf": "fusion_temp",
         "tau_f": "fusion_temp",
+        "dcgl_neg_weight": "dcgl_neg_weight",
+        "neg_weight": "dcgl_neg_weight",
+        "negative_weight": "dcgl_neg_weight",
+        "lambda_sep": "dcgl_neg_weight",
+        "sep": "dcgl_neg_weight",
+        "separation_weight": "dcgl_neg_weight",
+        "cluster_separation": "dcgl_neg_weight",
         "lambda_inst": "lambda_inst",
         "lambda_clu": "lambda_clu",
         "warmup": "warmup_epochs",
@@ -188,6 +199,15 @@ def parse_value_overrides(raw_values: list[str]) -> dict[str, tuple[float | int,
         "ae_k": "k_E",
         "propagation_depth": "t",
         "smooth_t": "t",
+        "tf": "fusion_temp",
+        "tau_f": "fusion_temp",
+        "dcgl_neg_weight": "dcgl_neg_weight",
+        "neg_weight": "dcgl_neg_weight",
+        "negative_weight": "dcgl_neg_weight",
+        "lambda_sep": "dcgl_neg_weight",
+        "sep": "dcgl_neg_weight",
+        "separation_weight": "dcgl_neg_weight",
+        "cluster_separation": "dcgl_neg_weight",
     }
     for item in raw_values:
         if "=" not in item:
@@ -308,14 +328,22 @@ def build_train_command(
         profile.get("train_args", {}),
     )
     train_args["device"] = args.device
+    train_args["runs"] = int(args.runs)
+    train_args["seed_start"] = int(args.seed_start)
     if param == "t":
         train_args["t"] = int(value)
 
     dual_attn_args = merge_args(config.get("dual_attn_args", {}), profile.get("dual_attn_args", {}))
     if param in dual_attn_args or param in {"fusion_temp", "lambda_inst", "lambda_clu"}:
         dual_attn_args[param] = value
-    elif param not in {"k_E", "t"}:
+    elif param not in {"k_E", "t", "dcgl_neg_weight"}:
         raise ValueError(f"Cannot apply parameter '{param}' to train.py command.")
+
+    module_args = build_module_args(config, profile)
+    if param == "dcgl_neg_weight":
+        module_args["dcgl_neg_weight"] = float(value)
+
+    train_args = merge_args(train_args, config.get("dual_args", {}), dual_attn_args)
 
     cmd = [
         str(args.python),
@@ -330,17 +358,11 @@ def build_train_command(
         str(ae_graph_path),
         "--fusion_mode",
         "attn",
-        "--runs",
-        str(args.runs),
-        "--seed_start",
-        str(args.seed_start),
         "--save_fusion_weights_path",
         str(fusion_weight_path),
     ]
     cmd.extend(dict_to_cli(train_args))
-    cmd.extend(dict_to_cli(config.get("dual_args", {})))
-    cmd.extend(dict_to_cli(dual_attn_args))
-    cmd.extend(dict_to_cli(build_module_args(config, profile)))
+    cmd.extend(dict_to_cli(module_args))
     return cmd
 
 
@@ -512,9 +534,10 @@ def write_summary(run_dir: Path, rows: list[dict[str, Any]], aggregate: list[dic
     lines.append(f"- Runs per setting: {args.runs}")
     lines.append(f"- Train seeds: {args.seed_start}..{args.seed_start + args.runs - 1}")
     lines.append(f"- Device: {args.device}")
-    lines.append(f"- Parameters: {', '.join(params)}")
+    lines.append(f"- Parameters: {', '.join(PARAM_LABELS.get(param, param) for param in params)}")
     lines.append("- Protocol: one-factor-at-a-time around current experiment.py final DSAFC dual-attention settings.")
     lines.append("- AE assets: current project AE graph is reused except k_E, whose AE graph is generated inside this run directory.")
+    lines.append("- Naming note: code parameter `dcgl_neg_weight` is reported as the paper-facing cluster-separation strength `lambda_sep`.")
     lines.append("")
 
     lines.append("## Aggregate By Parameter Value")

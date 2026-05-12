@@ -111,7 +111,7 @@ def _load_npy_adj(adj_path):
     return adj
 
 
-def load_npy_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5):
+def load_npy_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5, raw_graph_path=None):
     triplet = _discover_npy_triplet(dataset)
     if triplet is None:
         raise FileNotFoundError(f"Cannot find npy triplet for dataset: {dataset}")
@@ -132,8 +132,12 @@ def load_npy_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5):
 
     _, _, _, default_ae_graph_path = _resolve_sdcn_paths(dataset)
     if graph_mode == 'raw':
-        print(f"Loading original npy graph from: {adj_path}")
-        adj = _load_npy_adj(adj_path)
+        if raw_graph_path is not None and str(raw_graph_path).strip() != "":
+            print(f"Loading override raw graph from: {raw_graph_path}")
+            adj = _read_edge_list_to_adj(raw_graph_path, features.shape[0])
+        else:
+            print(f"Loading original npy graph from: {adj_path}")
+            adj = _load_npy_adj(adj_path)
     elif graph_mode == 'knn':
         adj = _build_knn_adj(features, knn_k)
     elif graph_mode == 'ae':
@@ -201,20 +205,24 @@ def _resolve_existing_base_graph(dataset, knn_k):
 ### ---------------------------------------
 
 
-def load_sdcn_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5):
+def load_sdcn_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5, raw_graph_path=None):
     print(f"Loading SDCN data: {dataset} ...")
     features, labels = _load_sdcn_features_and_labels(dataset)
     _, _, base_graph_path, default_ae_graph_path = _resolve_sdcn_paths(dataset)
 
     if graph_mode == 'raw':
         ### <--- [MODIFIED] ---------------------------------------
-        base_graph_path = _resolve_existing_base_graph(dataset, knn_k)
-        if base_graph_path is not None:
-            print(f"Loading base graph from: {base_graph_path}")
-            adj = _read_edge_list_to_adj(base_graph_path, features.shape[0])
+        if raw_graph_path is not None and str(raw_graph_path).strip() != "":
+            print(f"Loading override raw graph from: {raw_graph_path}")
+            adj = _read_edge_list_to_adj(raw_graph_path, features.shape[0])
         else:
-            print(f"Base graph not found for {dataset}; fallback to online KNN graph.")
-            adj = _build_knn_adj(features, knn_k)
+            base_graph_path = _resolve_existing_base_graph(dataset, knn_k)
+            if base_graph_path is not None:
+                print(f"Loading base graph from: {base_graph_path}")
+                adj = _read_edge_list_to_adj(base_graph_path, features.shape[0])
+            else:
+                print(f"Base graph not found for {dataset}; fallback to online KNN graph.")
+                adj = _build_knn_adj(features, knn_k)
         ### ---------------------------------------
     elif graph_mode == 'knn':
         adj = _build_knn_adj(features, knn_k)
@@ -248,7 +256,7 @@ def sample_mask(idx, l):
     return np.array(mask, dtype=bool)
 
 
-def load_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5):
+def load_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5, raw_graph_path=None):
     ### <--- [MODIFIED] ---------------------------------------
     # Unified project data entry:
     # 1) Prefer full_dataset npy triplets to preserve original adj information.
@@ -260,7 +268,8 @@ def load_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5):
             dataset,
             graph_mode=graph_mode,
             ae_graph_path=ae_graph_path,
-            knn_k=knn_k
+            knn_k=knn_k,
+            raw_graph_path=raw_graph_path,
         )
 
     if not _has_txt_style_dataset(dataset):
@@ -275,7 +284,8 @@ def load_data(dataset, graph_mode='raw', ae_graph_path=None, knn_k=5):
         dataset,
         graph_mode=graph_mode,
         ae_graph_path=ae_graph_path,
-        knn_k=knn_k
+        knn_k=knn_k,
+        raw_graph_path=raw_graph_path,
     )
     ### ---------------------------------------
 

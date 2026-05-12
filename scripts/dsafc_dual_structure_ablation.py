@@ -21,6 +21,7 @@ OUTPUT_ROOT = ROOT / "experiment_output" / "dsafc_dual_structure_ablation"
 SCGC_ENV_PYTHON = Path(r"C:\Users\stern\anaconda3\envs\SCGC_1\python.exe")
 DEFAULT_PYTHON = SCGC_ENV_PYTHON if SCGC_ENV_PYTHON.exists() else Path(sys.executable)
 METRICS = ("ACC", "NMI", "ARI", "F1")
+ACTIVE_DATASETS = ("reut", "uat", "amap", "usps", "cora", "cite")
 ABLATION_ORDER = ("osl", "rsl", "f_dsf", "a_dsf", "dsafc")
 ABLATION_LABELS = {
     "osl": "OSL",
@@ -143,14 +144,12 @@ def parse_dataset_list(raw: str, config: dict[str, Any]) -> tuple[str, ...]:
         "uat": "uat",
         "amap": "amap",
         "usps": "usps",
-        "eat": "eat",
         "cora": "cora",
         "cite": "cite",
         "citeseer": "cite",
     }
     if str(raw).strip().lower() == "all":
-        preferred = ["reut", "uat", "amap", "usps", "eat", "cora", "cite"]
-        return tuple(name for name in preferred if name in profiles)
+        return tuple(name for name in ACTIVE_DATASETS if name in profiles)
     out: list[str] = []
     for token in str(raw).replace(";", ",").split(","):
         name = token.strip().lower().replace("-", "_")

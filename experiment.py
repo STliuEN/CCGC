@@ -172,45 +172,79 @@ CONFIG = {
         "usps": {
             "cluster_num": 10,
             "train_args": {
-                ### <--- [MODIFIED] ---------------------------------------
-                # Main-table USPS center keeps the standard 1e-4 train step.
-                "lr": 1e-4,
+                # Final explicit train.py contract for this dataset.
+                "knn_k": 5,
                 "t": 6,
+                "linlayers": 1,
+                "epochs": 400,
                 "dims": 768,
-                ### ---------------------------------------
+                "lr": 1e-4,
+                "device": "cuda",
+                "threshold": 0.4,
+                "alpha": 0.5,
+                "warmup_epochs": 35,
+                "runs": 10,
+                "seed_start": 0,
             },
             "ae_args": {
+                # Final explicit AE-pretrain/AE-graph contract for this dataset.
                 "base_graph_path": "data/graph/usps5_graph.txt",
-                ### <--- [MODIFIED] ---------------------------------------
-                # Main-table USPS row used the default project AE graph asset.
+                "out_graph_path": "data/ae_graph/usps_ae_graph.txt",
+                "model_save_path": "pretrain_graph/usps_ae_pretrain.pkl",
                 "epochs": 30,
+                "batch_size": 256,
                 "lr": 1e-3,
+                "n_enc_1": 500,
+                "n_enc_2": 500,
+                "n_enc_3": 2000,
+                "n_dec_1": 2000,
+                "n_dec_2": 500,
+                "n_dec_3": 500,
                 "n_z": 10,
+                "ae_k": 15,
+                "sim_method": "cos",
+                "device": "cuda",
                 "pretrain_seed": 42,
                 "graph_seed": 42,
-                ### ---------------------------------------
             },
             "dual_attn_args": {
+                # Final explicit attention-fusion contract for this dataset.
                 "fusion_hidden": 64,
                 "fusion_temp": 1,
                 "fusion_balance": 0.30,
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
+                "dist_tau": 0.5,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
                 "enable_adaptive_branch_bias": True,
+                "disable_adaptive_structure_prior": False,
+                "enable_runtime_adaptive_branch_bias": False,
                 "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_mode": "cap",
+                "adaptive_bias_cap": 0.12,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
-                "adaptive_bias_cap": 0.12,
-                "adaptive_bias_ramp_epochs": 5,
                 "adaptive_bias_ema": 0.90,
-                "adaptive_bias_mode": "cap",
+                "adaptive_bias_ramp_epochs": 5,
+                "adaptive_bias_sparse_raw_degree_max": 12.0,
+                "adaptive_bias_ae_degree_ratio_min": 1.7,
+                "adaptive_bias_new_edge_ratio_min": 0.75,
+                "adaptive_bias_feature_gain_max": 0.12,
+                "adaptive_bias_raw_feature_cos_max": 0.35,
+                "adaptive_bias_feature_density_max": 0.02,
+                "adaptive_bias_nonzero_abs_mean_max": 1.05,
+                "adaptive_bias_dense_feature_density_min": 0.05,
+                "adaptive_bias_feature_loss_max": -0.02,
             },
             "dcgl_negative_args": {
+                "enable_dcgl_negative_loss": True,
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
                 "disable_dcgl_neg_reliability_gate":True,
+                "dcgl_neg_gate_threshold": 0.55,
+                "dcgl_neg_gate_power": 2.0,
+                "dcgl_neg_gate_min": 0.0,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -242,48 +276,79 @@ CONFIG = {
         "reut": {
             "cluster_num": 4,
             "train_args": {
-                ### <--- [MODIFIED] ---------------------------------------
-                # Main training suggestion: high-dimensional text data is more stable with a smaller lr.
-                "lr": 1e-4,
+                # Final explicit train.py contract for this dataset.
+                "knn_k": 5,
                 "t": 5,
+                "linlayers": 1,
+                "epochs": 400,
                 "dims": 768,
-                ### ---------------------------------------
+                "lr": 1e-4,
+                "device": "cuda",
+                "threshold": 0.4,
+                "alpha": 0.5,
+                "warmup_epochs": 35,
+                "runs": 10,
+                "seed_start": 0,
             },
             "ae_args": {
+                # Final explicit AE-pretrain/AE-graph contract for this dataset.
                 "base_graph_path": "data/graph/reut5_graph.txt",
-                ### <--- [MODIFIED] ---------------------------------------
-                # Reuters regressed sharply in the latest trial.
-                # Restore the historically stabler AE-pretrain setting under the
-                # unified 30-epoch horizon: default 1e-3 step and compact latent dim n_z=3.
+                "out_graph_path": "data/ae_graph/reut_ae_graph.txt",
+                "model_save_path": "pretrain_graph/reut_ae_pretrain.pkl",
                 "epochs": 30,
+                "batch_size": 256,
                 "lr": 1e-3,
+                "n_enc_1": 500,
+                "n_enc_2": 500,
+                "n_enc_3": 2000,
+                "n_dec_1": 2000,
+                "n_dec_2": 500,
+                "n_dec_3": 500,
                 "n_z": 3,
+                "ae_k": 15,
+                "sim_method": "cos",
+                "device": "cuda",
                 "pretrain_seed": 42,
                 "graph_seed": 42,
-                ### ---------------------------------------
             },
             "dual_attn_args": {
+                # Final explicit attention-fusion contract for this dataset.
                 "fusion_hidden": 64,
                 "fusion_temp": 1.6,
                 "fusion_balance": 0.30,
                 "lambda_inst": 0.06,
                 "lambda_clu": 0.02,
+                "dist_tau": 0.5,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
+                "enable_adaptive_branch_bias": True,
+                "disable_adaptive_structure_prior": False,
                 "enable_runtime_adaptive_branch_bias": True,
-                # Keep Reuters on the AE-dominant side. cap < 0.5 guarantees
-                # wAE > wA after the runtime reliability correction triggers.
+                "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_mode": "cap",
                 "adaptive_bias_cap": 0.22,
                 "adaptive_bias_margin": 0.0,
                 "adaptive_bias_patience": 1,
                 "adaptive_bias_ema": 0.50,
                 "adaptive_bias_ramp_epochs": 5,
-                "adaptive_bias_mode": "cap",
+                "adaptive_bias_sparse_raw_degree_max": 12.0,
+                "adaptive_bias_ae_degree_ratio_min": 1.7,
+                "adaptive_bias_new_edge_ratio_min": 0.75,
+                "adaptive_bias_feature_gain_max": 0.12,
+                "adaptive_bias_raw_feature_cos_max": 0.35,
+                "adaptive_bias_feature_density_max": 0.02,
+                "adaptive_bias_nonzero_abs_mean_max": 1.05,
+                "adaptive_bias_dense_feature_density_min": 0.05,
+                "adaptive_bias_feature_loss_max": -0.02,
             },
             "dcgl_negative_args": {
+                "enable_dcgl_negative_loss": True,
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.3,
                 "disable_dcgl_neg_reliability_gate":True,
+                "dcgl_neg_gate_threshold": 0.55,
+                "dcgl_neg_gate_power": 2.0,
+                "dcgl_neg_gate_min": 0.0,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -334,39 +399,79 @@ CONFIG = {
         "amap": {
             "cluster_num": 8,
             "train_args": {
-                ### <--- [MODIFIED] ---------------------------------------
-                # CCGC original dataset: keep the paper-aligned main-train lr.
+                # Final explicit train.py contract for this dataset.
+                "knn_k": 5,
+                "t": 4,
+                "linlayers": 1,
+                "epochs": 400,
+                "dims": 500,
                 "lr": 1e-4,
-                ### ---------------------------------------
+                "device": "cuda",
+                "threshold": 0.4,
+                "alpha": 0.5,
+                "warmup_epochs": 35,
+                "runs": 10,
+                "seed_start": 0,
             },
             "ae_args": {
+                # Final explicit AE-pretrain/AE-graph contract for this dataset.
                 "base_graph_path": "data/graph/amap_graph.txt",
-                ### <--- [MODIFIED] ---------------------------------------
-                # AE suggestion: medium step size for this denser feature scale.
+                "out_graph_path": "data/ae_graph/amap_ae_graph.txt",
+                "model_save_path": "pretrain_graph/amap_ae_pretrain.pkl",
+                "epochs": 30,
+                "batch_size": 256,
                 "lr": 5e-4,
+                "n_enc_1": 500,
+                "n_enc_2": 500,
+                "n_enc_3": 2000,
+                "n_dec_1": 2000,
+                "n_dec_2": 500,
+                "n_dec_3": 500,
                 "n_z": 8,
+                "ae_k": 15,
+                "sim_method": "cos",
+                "device": "cuda",
                 "pretrain_seed": 42,
                 "graph_seed": 42,
-                ### ---------------------------------------
             },
             "dual_attn_args": {
+                # Final explicit attention-fusion contract for this dataset.
                 "fusion_hidden": 64,
                 "fusion_temp": 1.0,
                 "fusion_balance": 0.08,
                 "lambda_inst": 0.0,
                 "lambda_clu": 0.035,
+                "dist_tau": 0.5,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
+                "enable_adaptive_branch_bias": True,
+                "disable_adaptive_structure_prior": False,
+                "enable_runtime_adaptive_branch_bias": False,
+                "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_mode": "cap",
                 "adaptive_bias_cap": 0.15,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
                 "adaptive_bias_ema": 0.90,
                 "adaptive_bias_ramp_epochs": 40,
+                "adaptive_bias_sparse_raw_degree_max": 12.0,
+                "adaptive_bias_ae_degree_ratio_min": 1.7,
+                "adaptive_bias_new_edge_ratio_min": 0.75,
+                "adaptive_bias_feature_gain_max": 0.12,
+                "adaptive_bias_raw_feature_cos_max": 0.35,
+                "adaptive_bias_feature_density_max": 0.02,
+                "adaptive_bias_nonzero_abs_mean_max": 1.05,
+                "adaptive_bias_dense_feature_density_min": 0.05,
+                "adaptive_bias_feature_loss_max": -0.02,
             },
             "dcgl_negative_args": {
+                "enable_dcgl_negative_loss": True,
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.49,
                 "disable_dcgl_neg_reliability_gate":True,
+                "dcgl_neg_gate_threshold": 0.55,
+                "dcgl_neg_gate_power": 2.0,
+                "dcgl_neg_gate_min": 0.0,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -418,45 +523,79 @@ CONFIG = {
         "cite": {
             "cluster_num": 6,
             "train_args": {
-                ### <--- [MODIFIED] ---------------------------------------
-                # CCGC original dataset: keep the paper-aligned main-train lr.
-                "lr": 1e-4,
+                # Final explicit train.py contract for this dataset.
+                "knn_k": 5,
+                "t": 4,
+                "linlayers": 1,
+                "epochs": 400,
                 "dims": 768,
+                "lr": 1e-4,
+                "device": "cuda",
                 "threshold": 0.50,
-                ### ---------------------------------------
+                "alpha": 0.5,
+                "warmup_epochs": 35,
+                "runs": 10,
+                "seed_start": 0,
             },
             "ae_args": {
+                # Final explicit AE-pretrain/AE-graph contract for this dataset.
                 "base_graph_path": "data/graph/cite_graph.txt",
-                ### <--- [MODIFIED] ---------------------------------------
-                # CiteSeer dropped the most under the newer AE-pretrain override.
-                # Restore the earlier effective setting under the unified 30-epoch
-                # AE horizon: lr=1e-3 and n_z=3.
+                "out_graph_path": "data/ae_graph/cite_ae_graph.txt",
+                "model_save_path": "pretrain_graph/cite_ae_pretrain.pkl",
                 "epochs": 30,
+                "batch_size": 256,
                 "lr": 1e-3,
+                "n_enc_1": 500,
+                "n_enc_2": 500,
+                "n_enc_3": 2000,
+                "n_dec_1": 2000,
+                "n_dec_2": 500,
+                "n_dec_3": 500,
                 "n_z": 3,
+                "ae_k": 15,
+                "sim_method": "cos",
+                "device": "cuda",
                 "pretrain_seed": 42,
                 "graph_seed": 42,
-                ### ---------------------------------------
             },
             "dual_attn_args": {
+                # Final explicit attention-fusion contract for this dataset.
                 "fusion_hidden": 64,
                 "fusion_temp": 2.2,
                 "fusion_balance": 0.10,
                 "lambda_inst": 0.03,
                 "lambda_clu": 0.02,
+                "dist_tau": 0.5,
                 "warmup_epochs": 55,
                 "fusion_min_weight": 0.05,
+                "enable_adaptive_branch_bias": True,
+                "disable_adaptive_structure_prior": False,
+                "enable_runtime_adaptive_branch_bias": False,
+                "adaptive_bias_start_epoch": -1,
                 "adaptive_bias_mode": "cap",
                 "adaptive_bias_cap": 0.27,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
                 "adaptive_bias_ema": 0.90,
                 "adaptive_bias_ramp_epochs": 30,
+                "adaptive_bias_sparse_raw_degree_max": 12.0,
+                "adaptive_bias_ae_degree_ratio_min": 1.7,
+                "adaptive_bias_new_edge_ratio_min": 0.75,
+                "adaptive_bias_feature_gain_max": 0.12,
+                "adaptive_bias_raw_feature_cos_max": 0.35,
+                "adaptive_bias_feature_density_max": 0.02,
+                "adaptive_bias_nonzero_abs_mean_max": 1.05,
+                "adaptive_bias_dense_feature_density_min": 0.05,
+                "adaptive_bias_feature_loss_max": -0.02,
             },
             "dcgl_negative_args": {
+                "enable_dcgl_negative_loss": True,
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
                 "disable_dcgl_neg_reliability_gate":True,
+                "dcgl_neg_gate_threshold": 0.55,
+                "dcgl_neg_gate_power": 2.0,
+                "dcgl_neg_gate_min": 0.0,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -479,44 +618,79 @@ CONFIG = {
         "cora": {
             "cluster_num": 7,
             "train_args": {
-                ### <--- [MODIFIED] ---------------------------------------
-                # CCGC original dataset: keep the paper-aligned main-train lr.
-                "lr": 1e-4,
-                "dims": 768,
+                # Final explicit train.py contract for this dataset.
+                "knn_k": 5,
                 "t": 5,
+                "linlayers": 1,
+                "epochs": 400,
+                "dims": 768,
+                "lr": 1e-4,
+                "device": "cuda",
                 "threshold": 0.40,
-                ### ---------------------------------------
+                "alpha": 0.5,
+                "warmup_epochs": 35,
+                "runs": 10,
+                "seed_start": 0,
             },
             "ae_args": {
+                # Final explicit AE-pretrain/AE-graph contract for this dataset.
                 "base_graph_path": "data/graph/cora_graph.txt",
-                ### <--- [MODIFIED] ---------------------------------------
-                # AE suggestion: moderate lr for sparse citation features.
+                "out_graph_path": "data/ae_graph/cora_ae_graph.txt",
+                "model_save_path": "pretrain_graph/cora_ae_pretrain.pkl",
+                "epochs": 30,
+                "batch_size": 256,
                 "lr": 3e-4,
+                "n_enc_1": 500,
+                "n_enc_2": 500,
+                "n_enc_3": 2000,
+                "n_dec_1": 2000,
+                "n_dec_2": 500,
+                "n_dec_3": 500,
                 "n_z": 7,
+                "ae_k": 15,
+                "sim_method": "cos",
+                "device": "cuda",
                 "pretrain_seed": 42,
                 "graph_seed": 42,
-                ### ---------------------------------------
             },
             "dual_attn_args": {
+                # Final explicit attention-fusion contract for this dataset.
                 "fusion_hidden": 64,
                 "fusion_temp": 1.36,
                 "fusion_balance": 0.0,
                 "lambda_inst": 0.03,
                 "lambda_clu": 0.01,
+                "dist_tau": 0.5,
                 "warmup_epochs": 70,
                 "fusion_min_weight": 0.05,
                 "enable_adaptive_branch_bias": True,
+                "disable_adaptive_structure_prior": False,
+                "enable_runtime_adaptive_branch_bias": False,
+                "adaptive_bias_start_epoch": -1,
                 "adaptive_bias_mode": "cap",
                 "adaptive_bias_cap": 0.08,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
                 "adaptive_bias_ema": 0.90,
                 "adaptive_bias_ramp_epochs": 1,
+                "adaptive_bias_sparse_raw_degree_max": 12.0,
+                "adaptive_bias_ae_degree_ratio_min": 1.7,
+                "adaptive_bias_new_edge_ratio_min": 0.75,
+                "adaptive_bias_feature_gain_max": 0.12,
+                "adaptive_bias_raw_feature_cos_max": 0.35,
+                "adaptive_bias_feature_density_max": 0.02,
+                "adaptive_bias_nonzero_abs_mean_max": 1.05,
+                "adaptive_bias_dense_feature_density_min": 0.05,
+                "adaptive_bias_feature_loss_max": -0.02,
             },
             "dcgl_negative_args": {
+                "enable_dcgl_negative_loss": True,
                 "dcgl_neg_tau": 0.5,
                 "dcgl_neg_weight": 0.6,
                 "disable_dcgl_neg_reliability_gate":True,
+                "dcgl_neg_gate_threshold": 0.55,
+                "dcgl_neg_gate_power": 2.0,
+                "dcgl_neg_gate_min": 0.0,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -647,52 +821,79 @@ CONFIG = {
         "uat": {
             "cluster_num": 4,
             "train_args": {
-                ### <--- [MODIFIED] ---------------------------------------
-                # Final selected stable combo uses a slightly longer horizon,
-                # higher propagation depth, and a mild alpha reduction.
+                # Final explicit train.py contract for this dataset.
+                "knn_k": 5,
                 "t": 6,
+                "linlayers": 1,
                 "epochs": 500,
+                "dims": 500,
                 "lr": 1.2e-4,
+                "device": "cuda",
+                "threshold": 0.4,
                 "alpha": 0.45,
-                ### ---------------------------------------
+                "warmup_epochs": 35,
+                "runs": 10,
+                "seed_start": 0,
             },
             "ae_args": {
+                # Final explicit AE-pretrain/AE-graph contract for this dataset.
                 "base_graph_path": "data/graph/uat_graph.txt",
-                ### <--- [MODIFIED] ---------------------------------------
-                # AE suggestion: moderate lr for the smaller low-variance dataset.
+                "out_graph_path": "data/ae_graph/uat_ae_graph.txt",
+                "model_save_path": "pretrain_graph/uat_ae_pretrain.pkl",
+                "epochs": 30,
+                "batch_size": 256,
                 "lr": 3e-4,
+                "n_enc_1": 500,
+                "n_enc_2": 500,
+                "n_enc_3": 2000,
+                "n_dec_1": 2000,
+                "n_dec_2": 500,
+                "n_dec_3": 500,
                 "n_z": 4,
+                "ae_k": 15,
+                "sim_method": "cos",
+                "device": "cuda",
                 "pretrain_seed": 42,
                 "graph_seed": 42,
-                ### ---------------------------------------
             },
             "dual_attn_args": {
+                # Final explicit attention-fusion contract for this dataset.
                 "fusion_hidden": 64,
                 "fusion_temp": 1.0,
                 "fusion_balance": 20.0,
                 "lambda_inst": 0.09,
                 "lambda_clu": 0.09,
+                "dist_tau": 0.5,
                 "warmup_epochs": 35,
                 "fusion_min_weight": 0.05,
                 "enable_adaptive_branch_bias": True,
+                "disable_adaptive_structure_prior": False,
                 "enable_runtime_adaptive_branch_bias": False,
                 "adaptive_bias_start_epoch": -1,
+                "adaptive_bias_mode": "cap",
+                "adaptive_bias_cap": 0.20,
                 "adaptive_bias_margin": 0.1,
                 "adaptive_bias_patience": 12,
-                "adaptive_bias_cap": 0.20,
-                "adaptive_bias_ramp_epochs": 1,
                 "adaptive_bias_ema": 0.9,
-                "adaptive_bias_mode": "cap",
+                "adaptive_bias_ramp_epochs": 1,
                 "adaptive_bias_sparse_raw_degree_max": 24.0,
                 "adaptive_bias_ae_degree_ratio_min": 1.50,
                 "adaptive_bias_new_edge_ratio_min": 0.95,
                 "adaptive_bias_feature_gain_max": 0.90,
                 "adaptive_bias_raw_feature_cos_max": 0.60,
+                "adaptive_bias_feature_density_max": 0.02,
+                "adaptive_bias_nonzero_abs_mean_max": 1.05,
+                "adaptive_bias_dense_feature_density_min": 0.05,
+                "adaptive_bias_feature_loss_max": -0.02,
             },
             "dcgl_negative_args": {
+                "enable_dcgl_negative_loss": True,
                 "dcgl_neg_tau": 0.75,
                 "dcgl_neg_weight": 0.6,
                 "disable_dcgl_neg_reliability_gate":True,
+                "dcgl_neg_gate_threshold": 0.55,
+                "dcgl_neg_gate_power": 2.0,
+                "dcgl_neg_gate_min": 0.0,
             },
             "safe_tuning_grid": {
                 "train_args": {
@@ -1190,8 +1391,19 @@ def main():
         ### <--- [MODIFIED] ---------------------------------------
         dataset_train_args = profile.get("train_args", {})
         merged_train_args = _merge_args(CONFIG["train_common_args"], dataset_train_args)
+        merged_graph_train_args = _merge_args(CONFIG["baseline_args"], merged_train_args)
         dataset_dual_attn_args = profile.get("dual_attn_args", {})
         merged_dual_attn_args = _merge_args(CONFIG.get("dual_attn_args", {}), dataset_dual_attn_args)
+        merged_dual_mean_train_args = _merge_args(
+            merged_graph_train_args,
+            CONFIG["dual_args"],
+            CONFIG.get("dual_mean_args", {}),
+        )
+        merged_dual_attn_train_args = _merge_args(
+            merged_graph_train_args,
+            CONFIG["dual_args"],
+            merged_dual_attn_args,
+        )
         dataset_dcgl_negative_args = profile.get("dcgl_negative_args", {})
         dataset_improved_module_args = dict(improved_module_args)
         if dcgl_negative_enabled:
@@ -1249,7 +1461,7 @@ def main():
                 "--dataset", dataset,
                 "--cluster_num", str(cluster_num),
                 "--graph_mode", "raw",
-            ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(dataset_improved_module_args)
+            ] + _dict_to_cli(merged_graph_train_args) + _dict_to_cli(dataset_improved_module_args)
 
             baseline_result = _run_and_log(
                 name=f"{dataset}_baseline_raw",
@@ -1390,7 +1602,7 @@ def main():
                     "--graph_mode", "dual",
                     "--ae_graph_path", str(ae_graph_path),
                     "--fusion_mode", "mean",
-                ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(CONFIG["dual_args"]) + _dict_to_cli(CONFIG.get("dual_mean_args", {})) + _dict_to_cli(dataset_improved_module_args)
+                ] + _dict_to_cli(merged_dual_mean_train_args) + _dict_to_cli(dataset_improved_module_args)
 
                 dual_mean_result = _run_and_log(
                     name=f"{dataset}_train_with_dual_mean",
@@ -1421,7 +1633,7 @@ def main():
                     "--graph_mode", "dual",
                     "--ae_graph_path", str(ae_graph_path),
                     "--fusion_mode", "attn",
-                ] + _dict_to_cli(CONFIG["baseline_args"]) + _dict_to_cli(merged_train_args) + _dict_to_cli(CONFIG["dual_args"]) + _dict_to_cli(merged_dual_attn_args) + _dict_to_cli(dataset_improved_module_args)
+                ] + _dict_to_cli(merged_dual_attn_train_args) + _dict_to_cli(dataset_improved_module_args)
 
                 dual_attn_result = _run_and_log(
                     name=f"{dataset}_train_with_dual_attn",

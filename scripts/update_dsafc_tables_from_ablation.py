@@ -29,7 +29,9 @@ DATASET_LABELS = {
     "cite": "Citeseer",
     "citeseer": "Citeseer",
 }
-DATASET_ORDER = ("Reuters", "UAT", "AMAP", "USPS", "EAT", "Cora", "Citeseer")
+ACTIVE_DATASET_ORDER = ("Reuters", "UAT", "AMAP", "USPS", "Cora", "Citeseer")
+ARCHIVED_DATASET_ORDER = ("EAT",)
+DATASET_ORDER = ACTIVE_DATASET_ORDER + ARCHIVED_DATASET_ORDER
 FUSION_DOMINANCE_TOL = 0.05
 
 
@@ -137,6 +139,8 @@ def load_results(manifest: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]
     out: dict[str, dict[str, dict[str, Any]]] = {}
     for dataset_row in manifest.get("rows", []):
         dataset = normalize_dataset(str(dataset_row["dataset"]))
+        if dataset not in ACTIVE_DATASET_ORDER:
+            continue
         out[dataset] = {}
         for variant, row in (dataset_row.get("variants") or {}).items():
             if variant in VARIANTS:
@@ -150,6 +154,8 @@ def load_structure(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for dataset_row in manifest.get("rows", []):
         dataset = normalize_dataset(str(dataset_row["dataset"]))
+        if dataset not in ACTIVE_DATASET_ORDER:
+            continue
         diag = dataset_row.get("structure_diag")
         if diag:
             out[dataset] = diag
@@ -157,7 +163,7 @@ def load_structure(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def dataset_order_from_results(results: dict[str, dict[str, dict[str, Any]]]) -> tuple[str, ...]:
-    ordered = tuple(dataset for dataset in DATASET_ORDER if dataset in results)
+    ordered = tuple(dataset for dataset in ACTIVE_DATASET_ORDER if dataset in results)
     extras = tuple(dataset for dataset in results if dataset not in DATASET_ORDER)
     return ordered + extras
 

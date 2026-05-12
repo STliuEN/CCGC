@@ -42,8 +42,14 @@ HYPERPARAM_SENSITIVITY_RUN = (
     ROOT
     / "experiment_output"
     / "hyperparameter_sensitivity_ofat"
-    / "20260508_130549_reut_uat_amap_usps_cora_cite_t_kE_fusion_temp_lambda_clu"
+    / "final_four_current_contract"
 )
+REQUIRED_HYPERPARAM_SENSITIVITY_PARAMS = {"t", "k_E", "dcgl_neg_weight", "fusion_temp"}
+STRUCTURAL_UNCERTAINTY_ROOT = ROOT / "experiment_output" / "structural_uncertainty_robustness"
+FINAL_DATASETS = {"reut", "uat", "amap", "usps", "cora", "cite"}
+ACTIVE_DATASET_LABELS = ("Reuters", "UAT", "AMAP", "USPS", "Cora", "Citeseer")
+ARCHIVED_DATASET_LABELS = {"EAT"}
+ARCHIVED_METHODS = {"SCGC-N", "SCGC-N*"}
 PRIMARY_BAR = "#505050"
 SECONDARY_BAR = "#8d8d8d"
 TERTIARY_BAR = "#d8d8d8"
@@ -61,8 +67,6 @@ PLOT_COLORS = (
     "#7f8790",
     "#8a78a8",
 )
-FIXED_COLOR = PLOT_COLORS[0]
-DCGL_COLOR = PLOT_COLORS[1]
 ABLATION_COLORS = (
     RAW_BLUE,
     AE_ORANGE,
@@ -374,7 +378,7 @@ def render_table(
             if bold_last_col and c_idx == n_cols - 1:
                 weight = "bold"
             if (r_idx, c_idx) in bold_cells:
-                weight = "bold"
+                weight = "heavy"
             ha = col_aligns[c_idx]
             if ha == "left":
                 x = x_edges[c_idx] + 0.012
@@ -404,7 +408,7 @@ def render_table(
                     x0 = x_centers[c_idx] - cell_width * 0.23
                     x1 = x_centers[c_idx] + cell_width * 0.23
                 y_line = y_mid - row_heights[r_idx] * 0.28
-                ax.plot([x0, x1], [y_line, y_line], color="black", lw=1.05, solid_capstyle="butt")
+                ax.plot([x0, x1], [y_line, y_line], color="black", lw=1.35, solid_capstyle="butt")
 
     for label, start, end in group_spans:
         c_idx = group_col
@@ -475,6 +479,28 @@ def reorder_main_table_columns(columns: list[str], rows: list[list[str]]) -> tup
     return new_columns, new_rows
 
 
+def filter_active_table(
+    columns: list[str],
+    rows: list[list[str]],
+    *,
+    drop_methods: set[str] | None = None,
+    group_col: int | None = 0,
+) -> tuple[list[str], list[list[str]]]:
+    drop_methods = drop_methods or set()
+    keep_indices = [idx for idx, col in enumerate(columns) if idx < 2 or col not in drop_methods]
+    filtered_columns = [columns[idx] for idx in keep_indices]
+    filtered_rows: list[list[str]] = []
+    current_dataset = ""
+    for row in rows:
+        dataset_cell = row[group_col] if group_col is not None else row[0]
+        if dataset_cell:
+            current_dataset = dataset_cell
+        if current_dataset in ARCHIVED_DATASET_LABELS:
+            continue
+        filtered_rows.append([row[idx] for idx in keep_indices])
+    return filtered_columns, filtered_rows
+
+
 def ours_highlight_columns(columns: list[str]) -> dict[int, str]:
     try:
         ours_idx = columns.index("Ours")
@@ -530,6 +556,51 @@ def compute_dataset_average_ranks(columns: list[str], rows: list[list[str]]) -> 
             if ranks
         }
     return dataset_avg
+
+
+def compute_win_tie_loss_against_ours(
+    columns: list[str],
+    rows: list[list[str]],
+    *,
+    tie_tol: float = 0.05,
+) -> dict[str, tuple[int, int, int]]:
+    if "Ours" not in columns:
+        return {}
+    methods = [method for method in columns[2:] if method != "Ours"]
+    ours_idx = columns.index("Ours")
+    summary: dict[str, list[int]] = {method: [0, 0, 0] for method in methods}
+    for row in rows:
+        ours_value = _parse_float(row[ours_idx])
+        if ours_value is None:
+            continue
+        for method in methods:
+            method_value = _parse_float(row[columns.index(method)])
+            if method_value is None:
+                continue
+            if ours_value > method_value + tie_tol:
+                summary[method][0] += 1
+            elif method_value > ours_value + tie_tol:
+                summary[method][2] += 1
+            else:
+                summary[method][1] += 1
+    return {method: tuple(values) for method, values in summary.items()}
+
+
+def build_rank_summary_rows(columns: list[str], rows: list[list[str]]) -> list[list[str]]:
+    avg_ranks = compute_method_average_ranks(columns, rows)
+    wtl = compute_win_tie_loss_against_ours(columns, rows)
+    ordered = sorted(columns[2:], key=lambda method: (avg_ranks.get(method, float("inf")), method))
+    summary_rows: list[list[str]] = []
+    for method in ordered:
+        wins, ties, losses = wtl.get(method, (0, 0, 0)) if method != "Ours" else (0, 0, 0)
+        summary_rows.append(
+            [
+                method,
+                f"{avg_ranks.get(method, float('nan')):.2f}",
+                "-" if method == "Ours" else f"{wins}/{ties}/{losses}",
+            ]
+        )
+    return summary_rows
 
 
 def render_average_rank_chart(path: Path, columns: list[str], rows: list[list[str]]) -> None:
@@ -671,142 +742,6 @@ def render_ablation_acc_chart(path: Path, columns: list[str], rows: list[list[st
     plt.close(fig)
 
 
-def render_fixed_fusion_weight_chart(path: Path, columns: list[str], rows: list[list[str]]) -> None:
-    column_index = {column: idx for idx, column in enumerate(columns)}
-    required = {"Dataset", "Variant", "$w_A$", "DCGL-negative", "ACC", "Score", "Learned/used $w_A$"}
-    missing = required.difference(column_index)
-    if missing:
-        raise ValueError(f"Fixed fusion table is missing columns: {', '.join(sorted(missing))}")
-
-    datasets = list(dict.fromkeys(row[column_index["Dataset"]] for row in rows if row[column_index["Dataset"]]))
-    if not datasets:
-        raise ValueError("Fixed fusion table has no dataset rows.")
-
-    n_cols = 2 if len(datasets) > 1 else 1
-    n_rows = int(math.ceil(len(datasets) / n_cols))
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.35, 7.0), sharey=False, squeeze=False)
-    axes_arr = axes.ravel()
-    colors = {False: FIXED_COLOR, True: DCGL_COLOR}
-    legend_handles = []
-    legend_labels = []
-    for ax, dataset in zip(axes_arr, datasets):
-        dataset_rows = [row for row in rows if row[column_index["Dataset"]] == dataset]
-        dataset_scores = [
-            score
-            for score in (_parse_float(row[column_index["Score"]]) for row in dataset_rows)
-            if score is not None
-        ]
-        y_limits: tuple[float, float] | None = None
-        if dataset_scores:
-            y_min = float(min(dataset_scores))
-            y_max = float(max(dataset_scores))
-            span = max(1e-6, y_max - y_min)
-            min_span = 4.0 if y_max >= 100.0 else 2.0
-            target_span = max(span * 1.18, min_span)
-            center = (y_min + y_max) / 2.0
-            y_limits = (center - target_span / 2.0, center + target_span / 2.0)
-        for dcgl_flag in (False, True):
-            fixed_rows = [
-                row
-                for row in dataset_rows
-                if row[column_index["Variant"]] == "Fixed"
-                and row[column_index["DCGL-negative"]].strip().lower() == str(dcgl_flag).lower()
-            ]
-            fixed_points: list[tuple[float, float]] = []
-            for row in fixed_rows:
-                weight = _parse_float(row[column_index["$w_A$"]])
-                score = _parse_float(row[column_index["Score"]])
-                if weight is not None and score is not None:
-                    fixed_points.append((weight, score))
-            if fixed_points:
-                fixed_points.sort()
-                label = "Fixed + DCGL" if dcgl_flag else "Fixed"
-                line, = ax.plot(
-                    [point[0] for point in fixed_points],
-                    [point[1] for point in fixed_points],
-                    marker="o",
-                    markersize=3.2,
-                    lw=1.0,
-                    color=colors[dcgl_flag],
-                    label=label,
-                )
-                if label not in legend_labels:
-                    legend_handles.append(line)
-                    legend_labels.append(label)
-
-            dynamic_rows = [
-                row
-                for row in dataset_rows
-                if row[column_index["Variant"]] != "Fixed"
-                and row[column_index["DCGL-negative"]].strip().lower() == str(dcgl_flag).lower()
-            ]
-            for row in dynamic_rows:
-                weight = _parse_float(row[column_index["Learned/used $w_A$"]])
-                score = _parse_float(row[column_index["Score"]])
-                if weight is None or score is None:
-                    continue
-                label = "Adaptive + DCGL" if dcgl_flag else "Adaptive"
-                scatter = ax.scatter(
-                    [weight],
-                    [score],
-                    marker="o",
-                    s=58,
-                    facecolor="white",
-                    edgecolor=colors[dcgl_flag],
-                    linewidth=1.25,
-                    label=label,
-                    zorder=4,
-                )
-                ax.scatter(
-                    [weight],
-                    [score],
-                    marker="o",
-                    s=11,
-                    facecolor=colors[dcgl_flag],
-                    edgecolor=colors[dcgl_flag],
-                    linewidth=0.0,
-                    zorder=5,
-                )
-                if label not in legend_labels:
-                    legend_handles.append(scatter)
-                    legend_labels.append(label)
-
-        ax.set_title(dataset, fontsize=_font(9.5), fontweight="bold", pad=1)
-        ax.set_xlabel(r"Raw-graph weight $w_A$", fontsize=_font(7.5), fontweight="bold", labelpad=0.5)
-        ax.set_ylabel("Composite score", fontsize=_font(7.5), fontweight="bold", labelpad=0.5)
-        style_framed_axes(ax, grid_axis="y")
-        ax.set_xlim(-0.03, 1.03)
-        if y_limits is not None:
-            ax.set_ylim(*y_limits)
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
-        ax.set_box_aspect(1.0)
-        ax.tick_params(axis="both", labelsize=_font(6.9), pad=0.6)
-    for ax in axes_arr[len(datasets):]:
-        ax.axis("off")
-
-    if legend_handles:
-        legend = fig.legend(
-            legend_handles,
-            legend_labels,
-            ncol=min(4, len(legend_handles)),
-            loc="upper center",
-            bbox_to_anchor=(0.5, 0.972),
-            frameon=True,
-            fontsize=_font(7.4),
-            handlelength=0.95,
-            handletextpad=0.24,
-            columnspacing=0.42,
-            borderpad=0.26,
-            labelspacing=0.18,
-            markerscale=0.7,
-        )
-        style_legend(legend, linewidth=1.0)
-    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.952), h_pad=0.0, w_pad=-0.45)
-    fig.subplots_adjust(wspace=-0.06, hspace=0.17, top=0.93)
-    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.035)
-    plt.close(fig)
-
-
 def render_method_positioning_table(path: Path) -> None:
     rows = [
         ["Deep graph clustering", "DAEGC, SDCN, DFCN", "No / partial", "No", "No / partial", "No"],
@@ -839,6 +774,22 @@ def render_method_positioning_table(path: Path) -> None:
     )
 
 
+def render_dataset_statistics_table(path: Path, *, drop_datasets: set[str] | None = None) -> None:
+    columns, rows = load_markdown_table("Table 4-1 Dataset Statistics")
+    drop_datasets = drop_datasets or set()
+    rows = [row for row in rows if row and row[0] not in drop_datasets]
+    render_table(
+        path,
+        columns,
+        rows,
+        col_widths=[1.7, 1.25, 1.55, 2.1, 1.65, 1.0],
+        fig_width=11.0,
+        font_size=15.5,
+        header_size=18,
+        row_unit=0.48,
+    )
+
+
 def load_hyperparameter_sensitivity_rows() -> tuple[list[str], list[list[str]], list[dict[str, float | str]]]:
     aggregate_path = HYPERPARAM_SENSITIVITY_RUN / "aggregate.csv"
     if not aggregate_path.exists():
@@ -847,10 +798,10 @@ def load_hyperparameter_sensitivity_rows() -> tuple[list[str], list[list[str]], 
     label_map = {
         "t": r"$t$",
         "k_E": r"$k_E$",
+        "dcgl_neg_weight": r"$\lambda_{\mathrm{sep}}$",
         "fusion_temp": r"$\tau_f$",
-        "lambda_clu": r"$\lambda_{\mathrm{clu}}$",
     }
-    order = {"t": 0, "k_E": 1, "fusion_temp": 2, "lambda_clu": 3}
+    order = {"t": 0, "k_E": 1, "dcgl_neg_weight": 2, "fusion_temp": 3}
 
     records: list[dict[str, float | str]] = []
     with aggregate_path.open("r", encoding="utf-8", newline="") as handle:
@@ -872,6 +823,33 @@ def load_hyperparameter_sensitivity_rows() -> tuple[list[str], list[list[str]], 
                     "avg_score": float(row.get("avg_score") or 0.0),
                 }
             )
+    present_params = {str(item["param"]) for item in records}
+    missing_params = REQUIRED_HYPERPARAM_SENSITIVITY_PARAMS - present_params
+    if missing_params:
+        missing = ", ".join(sorted(missing_params))
+        raise ValueError(
+            "Hyperparameter sensitivity run is incomplete. "
+            f"Missing parameter(s): {missing}. Expected t, k_E, "
+            f"dcgl_neg_weight(lambda_sep), and fusion_temp in {aggregate_path}."
+        )
+
+    per_dataset_path = HYPERPARAM_SENSITIVITY_RUN / "per_dataset.csv"
+    if not per_dataset_path.exists():
+        raise FileNotFoundError(f"Missing hyperparameter sensitivity per-dataset CSV: {per_dataset_path}")
+    datasets: set[str] = set()
+    with per_dataset_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            if row.get("returncode") == "0" and row.get("param") in REQUIRED_HYPERPARAM_SENSITIVITY_PARAMS:
+                datasets.add(str(row.get("dataset", "")))
+    missing_datasets = FINAL_DATASETS - datasets
+    if missing_datasets:
+        missing = ", ".join(sorted(missing_datasets))
+        raise ValueError(
+            "Hyperparameter sensitivity run is not a final six-dataset run. "
+            f"Missing dataset(s): {missing}. Source: {per_dataset_path}."
+        )
+
     records.sort(key=lambda item: (order[str(item["param"])], float(item["value"])))
 
     columns = ["Parameter", "Value", "Avg ACC", "Avg NMI", "Avg ARI", "Avg F1"]
@@ -900,7 +878,7 @@ def load_hyperparameter_per_dataset_records() -> list[dict[str, float | str]]:
     if not per_dataset_path.exists():
         raise FileNotFoundError(f"Missing hyperparameter sensitivity per-dataset CSV: {per_dataset_path}")
 
-    order = {"t": 0, "k_E": 1, "fusion_temp": 2, "lambda_clu": 3}
+    order = {"t": 0, "k_E": 1, "dcgl_neg_weight": 2, "fusion_temp": 3}
     records: list[dict[str, float | str]] = []
     with per_dataset_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -929,8 +907,8 @@ def render_hyperparameter_sensitivity_chart(path: Path, records: list[dict[str, 
     panels = [
         ("t", r"Propagation depth $t$"),
         ("k_E", r"Refined graph $k_E$"),
+        ("dcgl_neg_weight", r"Separation strength $\lambda_{\mathrm{sep}}$"),
         ("fusion_temp", r"Fusion temperature $\tau_f$"),
-        ("lambda_clu", r"Cluster guidance $\lambda_{\mathrm{clu}}$"),
     ]
     dataset_labels = {
         "reut": "Reuters",
@@ -998,7 +976,7 @@ def render_hyperparameter_sensitivity_chart(path: Path, records: list[dict[str, 
         ax.tick_params(axis="both", labelsize=_font(8.0), pad=1.0)
         x_values = np.array(sorted(set(all_x)), dtype=float)
         ax.set_xticks(x_values)
-        if param in {"fusion_temp", "lambda_clu"}:
+        if param in {"fusion_temp", "dcgl_neg_weight"}:
             ax.set_xticklabels([f"{val:.2f}".rstrip("0").rstrip(".") for val in x_values])
         else:
             ax.set_xticklabels([str(int(val)) for val in x_values])
@@ -1040,6 +1018,74 @@ def render_hyperparameter_sensitivity_chart(path: Path, records: list[dict[str, 
     fig.subplots_adjust(left=0.075, right=0.995, bottom=0.07, top=0.88, wspace=0.15, hspace=0.35)
     fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.035)
     plt.close(fig)
+
+
+def resolve_structural_uncertainty_run() -> Path | None:
+    if not STRUCTURAL_UNCERTAINTY_ROOT.exists():
+        return None
+    candidates = sorted(
+        (path for path in STRUCTURAL_UNCERTAINTY_ROOT.iterdir() if path.is_dir()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        aggregate_path = candidate / "aggregate.csv"
+        if not aggregate_path.exists() or aggregate_path.stat().st_size <= 0:
+            continue
+        with aggregate_path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        if not rows:
+            continue
+        if any(row.get("variant") == "dsafc" and row.get("avg_acc") for row in rows):
+            return candidate
+    return None
+
+
+def load_structural_uncertainty_rows() -> tuple[list[str], list[list[str]]] | None:
+    run_dir = resolve_structural_uncertainty_run()
+    if run_dir is None:
+        return None
+    aggregate_path = run_dir / "aggregate.csv"
+    records: list[dict[str, str]] = []
+    with aggregate_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            records.append(row)
+    if not records:
+        return None
+
+    condition_order = {"edge_delete": 0, "edge_add": 1, "knn_k": 2}
+    records.sort(key=lambda row: (condition_order.get(row.get("condition", ""), 99), float(row.get("value", 0.0))))
+    label_map = {
+        "edge_delete": "Edge deletion",
+        "edge_add": "Edge addition",
+        "knn_k": "KNN perturbation",
+    }
+    columns = ["Condition", "Value", "Variant", "Datasets", "Avg ACC", "Avg NMI", "Avg ARI", "Avg F1"]
+    rows: list[list[str]] = []
+    last_key: tuple[str, str] | None = None
+    for row in records:
+        condition = row.get("condition", "")
+        value = float(row.get("value", 0.0))
+        if condition in {"edge_delete", "edge_add"}:
+            value_text = f"{int(round(value * 100))}%"
+        else:
+            value_text = str(int(value))
+        key = (condition, value_text)
+        rows.append(
+            [
+                label_map.get(condition, condition) if key != last_key else "",
+                value_text if key != last_key else "",
+                row.get("variant", ""),
+                str(int(float(row.get("datasets") or 0))),
+                f"{float(row.get('avg_acc') or 0.0):.2f}",
+                f"{float(row.get('avg_nmi') or 0.0):.2f}",
+                f"{float(row.get('avg_ari') or 0.0):.2f}",
+                f"{float(row.get('avg_f1') or 0.0):.2f}",
+            ]
+        )
+        last_key = key
+    return columns, rows
 
 
 def load_markdown_table(section_title: str, *, group_col: int | None = None) -> tuple[list[str], list[list[str]]]:
@@ -1172,7 +1218,7 @@ def main() -> None:
         ["", r"$u_{c,1}^{(v)},u_{c,2}^{(v)}$", "Cluster centers estimated from the two heads under view $v$."],
         ["", r"$s_c^{(v)},\omega_c^{(v)},\mathcal{B}_c^{(v)}$", "Reliability score, conservative gate, and negative center set for cluster $c$."],
         ["Optimization", r"$\mathcal{L}_{\mathrm{warm}}^{(v)},\mathcal{L}_{\mathrm{cg}}^{(v)}$", "Warm-up and cluster-guided discriminative objectives in view $v$."],
-        ["", r"$\alpha_{\mathrm{cg}},\lambda_{\mathrm{neg}},\tau_{\mathrm{neg}}$", "Base cluster-guidance negative coefficient, negative weight, and center-contrast temperature."],
+        ["", r"$\alpha_{\mathrm{cg}},\lambda_{\mathrm{sep}},\tau_{\mathrm{sep}}$", "Base cluster-guidance coefficient, cluster-separation strength, and center-contrast temperature."],
         ["", r"$\mathcal{L}_{\mathrm{ins}},\mathcal{L}_{\mathrm{clu}},\mathcal{L}_{\mathrm{bal}}$", "Instance consistency, cluster-distribution consistency, and fusion-balance regularizers."],
         ["", r"$T,\ E_w,\rho_e,\tau_d$", "Training epochs, warm-up epochs, ramp-up consistency coefficient, and cluster-distribution temperature."],
         ["", r"$\mathcal{L}$", "Final training objective."],
@@ -1192,28 +1238,11 @@ def main() -> None:
     )
 
     render_algorithm(ASSETS / "DSAFC_algorithm.png")
-
-    dataset_rows = [
-        ["Reuters", "Text", "10000", "2000", "46135", "4"],
-        ["UAT", "Graph", "1190", "239", "13599", "4"],
-        ["AMAP", "Graph", "7650", "745", "119081", "8"],
-        ["USPS", "Image", "9298", "256", "34996", "10"],
-        ["EAT", "Graph", "399", "203", "5993", "4"],
-        ["Cora", "Graph", "2708", "1433", "5278", "7"],
-        ["Citeseer", "Graph", "3327", "3703", "4552", "6"],
-    ]
-    render_table(
-        ASSETS / "DSAFC_dataset_statistics.png",
-        ["Dataset", "Type", "Sample", "Dimension", "Edge", "Class"],
-        dataset_rows,
-        col_widths=[1.7, 1.25, 1.55, 2.1, 1.65, 1.0],
-        fig_width=11.0,
-        font_size=15.5,
-        header_size=18,
-        row_unit=0.48,
-    )
+    render_dataset_statistics_table(ASSETS / "DSAFC_dataset_statistics.png", drop_datasets={"EAT"})
+    render_dataset_statistics_table(ASSETS / "DSAFC_kbs_dataset_statistics.png", drop_datasets={"EAT"})
 
     main_columns, main_rows = load_markdown_table("Table 4-2 Main Clustering Results", group_col=0)
+    main_columns, main_rows = filter_active_table(main_columns, main_rows, drop_methods=ARCHIVED_METHODS, group_col=0)
     main_columns, main_rows = reorder_main_table_columns(main_columns, main_rows)
     main_display_rows = mark_local_reproduction_cells(main_columns, main_rows)
     render_table(
@@ -1240,6 +1269,7 @@ def main() -> None:
     render_dataset_rank_heatmap(ASSETS / "DSAFC_rank_heatmap.png", main_columns, main_rows)
 
     ablation_columns, ablation_rows = load_markdown_table("Table 4-3 Ablation Results", group_col=0)
+    ablation_columns, ablation_rows = filter_active_table(ablation_columns, ablation_rows, group_col=0)
     render_table(
         ASSETS / "DSAFC_ablation_results.png",
         ablation_columns,
@@ -1254,8 +1284,23 @@ def main() -> None:
         bold_best=False,
         numeric_start_col=2,
     )
+    render_table(
+        ASSETS / "DSAFC_kbs_ablation_results.png",
+        ablation_columns,
+        ablation_rows,
+        col_widths=[1.45, 0.9, 1.28, 1.28, 1.28, 1.28, 1.32],
+        fig_width=15.4,
+        font_size=12.8,
+        header_size=15.2,
+        row_unit=0.42,
+        vertical_after=(0, 1),
+        group_col=0,
+        bold_best=False,
+        numeric_start_col=2,
+    )
 
     ablation_acc_columns, ablation_acc_rows = load_markdown_table("Figure 4-1 ACC Plot Data")
+    ablation_acc_columns, ablation_acc_rows = filter_active_table(ablation_acc_columns, ablation_acc_rows, group_col=0)
     render_ablation_acc_chart(
         ASSETS / "DSAFC_ablation_acc_comparison.png",
         ablation_acc_columns,
@@ -1263,6 +1308,7 @@ def main() -> None:
     )
 
     structure_columns, structure_rows = load_markdown_table("Table 4-4 Structure-Fusion Reliability Diagnosis")
+    structure_columns, structure_rows = filter_active_table(structure_columns, structure_rows, group_col=0)
     structure_columns, structure_rows = select_columns(
         structure_columns,
         structure_rows,
@@ -1305,13 +1351,54 @@ def main() -> None:
         vertical_after=(0, 5),
         numeric_start_col=1,
     )
-
-    fixed_fusion_columns, fixed_fusion_rows = load_markdown_table("Table 4-5a Fixed Fusion Weight Ablation")
-    render_fixed_fusion_weight_chart(
-        ASSETS / "DSAFC_fixed_fusion_weight_ablation.png",
-        fixed_fusion_columns,
-        fixed_fusion_rows,
+    render_table(
+        ASSETS / "DSAFC_kbs_structure_fusion_reliability_diagnosis.png",
+        structure_columns,
+        structure_rows,
+        col_widths=[1.45, 1.25, 1.3, 1.38, 1.44, 1.34, 1.5, 1.58, 1.25, 1.35],
+        wrap_widths=[14, 12, 12, 12, 12, 12, 15, 15, 12, 12],
+        fig_width=22.4,
+        font_size=12.5,
+        header_size=13.9,
+        row_unit=0.48,
+        header_unit=0.82,
+        vertical_after=(0, 5),
+        numeric_start_col=1,
     )
+
+    reliability_columns, reliability_rows = load_markdown_table("Table 4-5 Reliability Validation")
+    reliability_columns, reliability_rows = filter_active_table(reliability_columns, reliability_rows, group_col=0)
+    render_table(
+        ASSETS / "DSAFC_reliability_validation.png",
+        reliability_columns,
+        reliability_rows,
+        col_widths=[1.25, 1.25, 1.25, 1.38, 1.42, 1.18, 1.35, 2.7],
+        wrap_widths=[13, 12, 12, 14, 14, 12, 13, 24],
+        fig_width=16.8,
+        font_size=12.0,
+        header_size=13.2,
+        row_unit=0.42,
+        vertical_after=(0, 5),
+        numeric_start_col=1,
+    )
+
+    robustness_table = load_structural_uncertainty_rows()
+    if robustness_table is not None:
+        robustness_columns, robustness_rows = robustness_table
+        render_table(
+            ASSETS / "DSAFC_structural_uncertainty_robustness.png",
+            robustness_columns,
+            robustness_rows,
+            col_widths=[1.7, 0.78, 1.0, 0.82, 1.02, 1.02, 1.02, 1.02],
+            wrap_widths=[17, 8, 10, 8, 10, 10, 10, 10],
+            fig_width=13.4,
+            font_size=11.5,
+            header_size=12.7,
+            row_unit=0.34,
+            vertical_after=(0, 1),
+            group_col=0,
+            numeric_start_col=4,
+        )
 
     hyper_columns, hyper_rows, hyper_records = load_hyperparameter_sensitivity_rows()
     render_table(
