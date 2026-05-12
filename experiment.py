@@ -419,6 +419,8 @@ CONFIG = {
                 ### <--- [MODIFIED] ---------------------------------------
                 # CCGC original dataset: keep the paper-aligned main-train lr.
                 "lr": 1e-4,
+                "dims": 1024,
+                "threshold": 0.50,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -437,16 +439,17 @@ CONFIG = {
             "dual_attn_args": {
                 "fusion_hidden": 64,
                 "fusion_temp": 2.2,
-                "fusion_balance": 0.15,
-                "lambda_inst": 0.045,
+                "fusion_balance": 0.10,
+                "lambda_inst": 0.03,
                 "lambda_clu": 0.02,
                 "warmup_epochs": 55,
                 "fusion_min_weight": 0.05,
+                "adaptive_bias_mode": "cap",
                 "adaptive_bias_cap": 0.27,
                 "adaptive_bias_margin": 0.10,
                 "adaptive_bias_patience": 12,
                 "adaptive_bias_ema": 0.90,
-                "adaptive_bias_ramp_epochs": 40,
+                "adaptive_bias_ramp_epochs": 30,
             },
             "dcgl_negative_args": {
                 "dcgl_neg_tau": 0.5,
@@ -716,7 +719,7 @@ CONFIG = {
         "t": 4,
         "linlayers": 1,
         "epochs": 400,
-        "dims": 500,
+        "dims": 500,#test 768
         "lr": 1e-4,
         "device": "cuda",
         "threshold": 0.4,
