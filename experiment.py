@@ -176,6 +176,7 @@ CONFIG = {
                 # Main-table USPS center keeps the standard 1e-4 train step.
                 "lr": 1e-4,
                 "t": 6,
+                "dims": 768,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -245,6 +246,7 @@ CONFIG = {
                 # Main training suggestion: high-dimensional text data is more stable with a smaller lr.
                 "lr": 1e-4,
                 "t": 5,
+                "dims": 768,
                 ### ---------------------------------------
             },
             "ae_args": {
@@ -419,7 +421,7 @@ CONFIG = {
                 ### <--- [MODIFIED] ---------------------------------------
                 # CCGC original dataset: keep the paper-aligned main-train lr.
                 "lr": 1e-4,
-                "dims": 1024,
+                "dims": 768,
                 "threshold": 0.50,
                 ### ---------------------------------------
             },
